@@ -18,8 +18,5 @@ let package = Package(
         .target(
             name: "JapaneseLanguageTools",
             dependencies: []),
-        .testTarget(
-            name: "JapaneseLanguageToolsTests",
-            dependencies: ["JapaneseLanguageTools"]),
     ]
 )
