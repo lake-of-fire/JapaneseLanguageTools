@@ -2,11 +2,24 @@ import Foundation
 import RealmSwift
 
 public class TofuguAudioIndex: Object {
-    @objc public dynamic var Term: String? = nil
-    @objc public dynamic var Values: String? = nil
+    @Persisted(primaryKey: true) public var term: String = ""
+    @Persisted public var values: String = ""
     
     public static var realm: Realm? {
         return try? Realm(configuration: TofuguAudioIndexRealmConfigurer.configuration)
+    }
+    
+    public override init() {
+        super.init()
+    }
+    
+    public static func audioURL(term: String, readingKana: String) -> URL? {
+        guard let result = realm?.object(ofType: TofuguAudioIndex.self, forPrimaryKey: term), result.values.split(separator: ",").map({ String($0) }).contains(readingKana) else { return nil }
+        let filename = "\(term)【\(readingKana)】.mp3"
+        guard let escapedUrl = "https://manabi.io/media/audio/tofugu/\(filename)".addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed), let audioURL = URL(string: escapedUrl) else {
+            return nil
+        }
+        return audioURL
     }
 }
 

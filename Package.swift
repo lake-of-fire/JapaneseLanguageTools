@@ -24,5 +24,12 @@ let package = Package(
                 .copy("Resources/tofugu-audio-index.realm"),
             ]
         ),
+        .executableTarget(
+            name: "RealmCSVImporter",
+            dependencies: [
+                "JapaneseLanguageTools",
+                .product(name: "RealmSwift", package: "RealmBinary")
+            ]
+        )
     ]
 )
