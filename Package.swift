@@ -12,16 +12,17 @@ let package = Package(
             targets: ["JapaneseLanguageTools"]),
     ],
     dependencies: [
-//        .package(url: "https://github.com/lake-of-fire/RealmBinary.git", branch: "main"),
-        .package(url: "https://github.com/realm/realm-swift.git", branch: "master"),
+        .package(url: "https://github.com/lake-of-fire/RealmBinary.git", branch: "main"),
+//        .package(url: "https://github.com/realm/realm-swift.git", branch: "master"),
     ],
     targets: [
         .target(
             name: "JapaneseLanguageTools",
             dependencies: [
-//                .product(name: "RealmSwift", package: "RealmBinary"),
-                .product(name: "Realm", package: "realm-swift"),
-                .product(name: "RealmSwift", package: "realm-swift"),
+                .product(name: "Realm", package: "RealmBinary"),
+                .product(name: "RealmSwift", package: "RealmBinary"),
+//                .product(name: "Realm", package: "realm-swift"),
+//                .product(name: "RealmSwift", package: "realm-swift"),
             ],
             resources: [
                 .copy("Resources/tofugu-audio-index.realm"),
@@ -31,8 +32,10 @@ let package = Package(
             name: "RealmCSVImporter",
             dependencies: [
                 "JapaneseLanguageTools",
-                .product(name: "Realm", package: "realm-swift"),
-                .product(name: "RealmSwift", package: "realm-swift"),
+                .product(name: "Realm", package: "RealmBinary"),
+                .product(name: "RealmSwift", package: "RealmBinary"),
+//                .product(name: "Realm", package: "realm-swift"),
+//                .product(name: "RealmSwift", package: "realm-swift"),
             ]
         )
     ]
