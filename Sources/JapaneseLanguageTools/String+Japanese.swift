@@ -16,6 +16,20 @@ public extension StringProtocol where Self: RangeReplaceableCollection {
     var asciiRepresentation: String { map { $0.isASCII ? .init($0) : $0.hexaValues.joined() }.joined() }
 }
 
+fileprivate let kanaRanges = [0x3041...0x3096, 0x309d...0x309f, 0x30a1...0x30fa, 0x30fc...0x30ff, 0xff66...0xff9d]
+
+// CJK Unified Ideographs                   4E00-9FFF   Common
+//                                          19968-40959
+// CJK Unified Ideographs Extension A       3400-4DFF   Rare
+//                                          13312-19967
+// CJK Unified Ideographs Extension B       20000-2A6DF Rare, historic
+//                                          131072-173791
+// CJK Compatibility Ideographs             F900-FAFF   Duplicates, unifiable variants, corporate characters
+//                                          63744-64255
+// CJK Compatibility Ideographs Supplement  2F800-2FA1F Unifiable variants
+//                                          194560-195103
+fileprivate let kanjiRanges = [(19968, 40959), (13312, 19967), (131072, 173791), (63744, 64255), (194560, 195103)]
+
 public extension String {
     var isKana: Bool {
         get {
@@ -23,15 +37,8 @@ public extension String {
                 return false
             }
             // https://stackoverflow.com/a/38723951/89373
-            let kanaRanges = [0x3041...0x3096, 0x309d...0x309f, 0x30a1...0x30fa, 0x30fc...0x30ff, 0xff66...0xff9d]
             for scalar in unicodeScalars {
-                var inRange = false
-                for range in kanaRanges {
-                    if range ~= Int(scalar.value) {
-                        inRange = true
-                    }
-                }
-                if !inRange {
+                if !kanaRanges.allSatisfy({ $0 ~= Int(scalar.value) }) {
                     return false
                 }
             }
@@ -42,7 +49,6 @@ public extension String {
     var hasKana: Bool {
         get {
             // https://stackoverflow.com/a/38723951/89373
-            let kanaRanges = [0x3041...0x3096, 0x309d...0x309f, 0x30a1...0x30fa, 0x30fc...0x30ff, 0xff66...0xff9d]
             for scalar in unicodeScalars {
                 for range in kanaRanges {
                     if range ~= Int(scalar.value) {
@@ -56,18 +62,8 @@ public extension String {
 
     var hasKanji: Bool {
         get {
-            // CJK Unified Ideographs                   4E00-9FFF   Common
-            //                                          19968-40959
-            // CJK Unified Ideographs Extension A       3400-4DFF   Rare
-            //                                          13312-19967
-            // CJK Unified Ideographs Extension B       20000-2A6DF Rare, historic
-            //                                          131072-173791
-            // CJK Compatibility Ideographs             F900-FAFF   Duplicates, unifiable variants, corporate characters
-            //                                          63744-64255
-            // CJK Compatibility Ideographs Supplement  2F800-2FA1F Unifiable variants
-            //                                          194560-195103
             for scalar in unicodeScalars {
-                for (from, to) in [(19968, 40959), (13312, 19967), (131072, 173791), (63744, 64255), (194560, 195103)] {
+                for (from, to) in kanjiRanges {
                     if scalar.value >= UInt32(from) && scalar.value <= UInt32(to) {
                         return true
                     }
