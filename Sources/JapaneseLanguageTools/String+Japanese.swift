@@ -38,7 +38,7 @@ public extension String {
             }
             // https://stackoverflow.com/a/38723951/89373
             for scalar in unicodeScalars {
-                if !kanaRanges.allSatisfy({ $0 ~= Int(scalar.value) }) {
+                if !kanaRanges.contains(where: { $0 ~= Int(scalar.value) }) {
                     return false
                 }
             }
