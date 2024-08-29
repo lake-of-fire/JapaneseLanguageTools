@@ -19,7 +19,7 @@ let package = Package(
         .target(
             name: "JapaneseLanguageTools",
             dependencies: [
-//                .product(name: "Realm", package: "RealmBinary"),
+                .product(name: "Realm", package: "RealmBinary"),
                 .product(name: "RealmSwift", package: "RealmBinary"),
 //                .product(name: "Realm", package: "realm-swift"),
 //                .product(name: "RealmSwift", package: "realm-swift"),
