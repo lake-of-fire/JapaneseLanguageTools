@@ -1,10 +1,12 @@
 import Foundation
 import RealmSwift
+import BigSyncKit
 
-public class TofuguAudioIndex: Object {
+public class TofuguAudioIndex: Object, SoftDeletable {
     @Persisted(primaryKey: true) public var term: String = ""
     @Persisted public var values: String = ""
-    
+    @Persisted public var isDeleted = false
+
     public static var realm: Realm? {
         return try? Realm(configuration: TofuguAudioIndexRealmConfigurer.configuration)
     }

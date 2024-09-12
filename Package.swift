@@ -5,15 +5,17 @@ import PackageDescription
 
 let package = Package(
     name: "JapaneseLanguageTools",
-    platforms: [.macOS(.v12), .iOS(.v15), .watchOS(.v4)],
+    platforms: [.macOS(.v13), .iOS(.v15), .watchOS(.v4)],
     products: [
         .library(
             name: "JapaneseLanguageTools",
+            type: .dynamic,
             targets: ["JapaneseLanguageTools"]),
     ],
     dependencies: [
 //        .package(url: "https://github.com/RomanEsin/RealmBinary.git", from: "10.53.0"),
                 .package(url: "https://github.com/realm/realm-swift.git", from: "10.53.0"),
+                .package(url: "https://github.com/lake-of-fire/BigSyncKit.git", branch: "main"),
     ],
     targets: [
         .target(
@@ -23,6 +25,7 @@ let package = Package(
 //                .product(name: "RealmSwift", package: "RealmBinary"),
 //                .product(name: "Realm", package: "realm-swift"),
                 .product(name: "RealmSwift", package: "realm-swift"),
+                .product(name: "BigSyncKit", package: "BigSyncKit"),
             ],
             resources: [
                 .copy("Resources/tofugu-audio-index.realm"),
