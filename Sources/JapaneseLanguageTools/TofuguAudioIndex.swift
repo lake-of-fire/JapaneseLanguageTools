@@ -8,7 +8,12 @@ public class TofuguAudioIndex: Object, SoftDeletable {
     @Persisted public var isDeleted = false
 
     public static var realm: Realm? {
-        return try? Realm(configuration: TofuguAudioIndexRealmConfigurer.configuration)
+        do {
+            return try Realm(configuration: TofuguAudioIndexRealmConfigurer.configuration)
+        } catch {
+            debugPrint(error)
+            return nil
+        }
     }
     
     public override init() {
@@ -16,7 +21,9 @@ public class TofuguAudioIndex: Object, SoftDeletable {
     }
     
     public static func audioURL(term: String, readingKana: String) -> URL? {
-        guard let result = realm?.object(ofType: TofuguAudioIndex.self, forPrimaryKey: term), result.values.split(separator: ",").map({ String($0) }).contains(readingKana) else { return nil }
+        guard let result = realm?.object(ofType: TofuguAudioIndex.self, forPrimaryKey: term), result.values.split(separator: ",").map({ String($0) }).contains(readingKana) else {
+            return nil
+        }
         let filename = "\(term)【\(readingKana)】.mp3"
         guard let escapedUrl = "https://manabi.io/media/audio/tofugu/\(filename)".addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed), let audioURL = URL(string: escapedUrl) else {
             return nil
@@ -34,7 +41,13 @@ public enum TofuguAudioIndexRealmConfigurer {
         //        try! FileManager.default.setAttributes([.protectionKey: FileProtectionType.none], ofItemAtPath: url.path)
         //        var url = url.appendingPathComponent("collections")
         //        self.configuration = Realm.Configuration(fileURL: url)
-        let config = Realm.Configuration(fileURL: url, schemaVersion: 1, migrationBlock: migrationBlock(migration:oldSchemaVersion:), objectTypes: [TofuguAudioIndex.self])
+        let config = Realm.Configuration(
+            fileURL: url,
+            readOnly: true,
+            schemaVersion: 1,
+            migrationBlock: migrationBlock(migration:oldSchemaVersion:),
+            objectTypes: [TofuguAudioIndex.self]
+        )
         return config
     }
     
