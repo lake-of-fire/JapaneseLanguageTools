@@ -13,8 +13,8 @@ let package = Package(
             targets: ["JapaneseLanguageTools"]),
     ],
     dependencies: [
-//        .package(url: "https://github.com/RomanEsin/RealmBinary.git", from: "10.53.0"),
-                .package(url: "https://github.com/realm/realm-swift.git", from: "10.53.0"),
+        .package(url: "https://github.com/ugiacoman/RealmBinary.git", from: "10.53.0"),
+//                .package(url: "https://github.com/realm/realm-swift.git", from: "10.53.0"),
                 .package(url: "https://github.com/lake-of-fire/BigSyncKit.git", branch: "main"),
     ],
     targets: [
@@ -22,9 +22,8 @@ let package = Package(
             name: "JapaneseLanguageTools",
             dependencies: [
 //                .product(name: "Realm", package: "RealmBinary"),
-//                .product(name: "RealmSwift", package: "RealmBinary"),
-//                .product(name: "Realm", package: "realm-swift"),
-                .product(name: "RealmSwift", package: "realm-swift"),
+                .product(name: "RealmSwift", package: "RealmBinary"),
+//                .product(name: "RealmSwift", package: "realm-swift"),
                 .product(name: "BigSyncKit", package: "BigSyncKit"),
             ],
             resources: [
@@ -36,9 +35,8 @@ let package = Package(
             dependencies: [
                 "JapaneseLanguageTools",
 //                .product(name: "Realm", package: "RealmBinary"),
-//                .product(name: "RealmSwift", package: "RealmBinary"),
-//                .product(name: "Realm", package: "realm-swift"),
-                .product(name: "RealmSwift", package: "realm-swift"),
+                .product(name: "RealmSwift", package: "RealmBinary"),
+//                .product(name: "RealmSwift", package: "realm-swift"),
             ]
         )
     ]

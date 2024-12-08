@@ -16,7 +16,11 @@ public extension StringProtocol where Self: RangeReplaceableCollection {
     var asciiRepresentation: String { map { $0.isASCII ? .init($0) : $0.hexaValues.joined() }.joined() }
 }
 
-fileprivate let kanaRanges = [0x3041...0x3096, 0x309d...0x309f, 0x30a1...0x30fa, 0x30fc...0x30ff, 0xff66...0xff9d]
+fileprivate let katakanaRanges = [
+    0x30a1...0x30fa,
+    0x30fc...0x30ff,
+    0xff66...0xff9d
+]
 
 // CJK Unified Ideographs                   4E00-9FFF   Common
 //                                          19968-40959
@@ -30,36 +34,69 @@ fileprivate let kanaRanges = [0x3041...0x3096, 0x309d...0x309f, 0x30a1...0x30fa,
 //                                          194560-195103
 fileprivate let kanjiRanges = [(19968, 40959), (13312, 19967), (131072, 173791), (63744, 64255), (194560, 195103)]
 
-public extension String {
+public extension StringProtocol {
     var isKana: Bool {
-        get {
-            if isEmpty {
+        // https://stackoverflow.com/a/38723951/89373
+        for scalar in unicodeScalars {
+            switch scalar.value {
+            case 0x3041...0x3096, 0x309D...0x309F, // Hiragana ranges
+                0x30A1...0x30FA, 0x30FC...0x30FF, // Katakana ranges
+                0xFF66...0xFF9D: // Half-width Katakana ranges
+                continue
+            default:
                 return false
             }
+        }
+        guard !isEmpty else { return false }
+        return true
+    }
+    
+    var isKatakana: Bool {
+        get {
+            if isEmpty { return false }
             // https://stackoverflow.com/a/38723951/89373
             for scalar in unicodeScalars {
-                if !kanaRanges.contains(where: { $0 ~= Int(scalar.value) }) {
+                if !katakanaRanges.contains(where: { $0 ~= Int(scalar.value) }) {
                     return false
                 }
             }
             return true
         }
     }
-    
+
     var hasKana: Bool {
         get {
             // https://stackoverflow.com/a/38723951/89373
             for scalar in unicodeScalars {
-                for range in kanaRanges {
-                    if range ~= Int(scalar.value) {
-                        return true
-                    }
+                switch scalar.value {
+                case 0x3041...0x3096, 0x309D...0x309F, // Hiragana ranges
+                    0x30A1...0x30FA, 0x30FC...0x30FF, // Katakana ranges
+                    0xFF66...0xFF9D: // Half-width Katakana ranges
+                    return true
+                default:
+                    continue
                 }
             }
             return false
         }
     }
-
+    
+    var isKanji: Bool {
+        get {
+            return (
+                !unicodeScalars.isEmpty
+                && unicodeScalars.allSatisfy {
+                    for (from, to) in kanjiRanges {
+                        if $0.value >= UInt32(from) && $0.value <= UInt32(to) {
+                            return true
+                        }
+                    }
+                    return false
+                }
+            )
+        }
+    }
+    
     var hasKanji: Bool {
         get {
             for scalar in unicodeScalars {
