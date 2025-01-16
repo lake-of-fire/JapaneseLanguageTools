@@ -307,5 +307,45 @@ public extension StringProtocol {
             }.joined(separator: "")
         }
     }
-
+    
+    var containsHalfWidthDigits: Bool {
+        for byte in self.utf8 {
+            // ASCII '0' = 0x30, '9' = 0x39
+            if byte >= 0x30 && byte <= 0x39 {
+                return true
+            }
+        }
+        return false
+    }
+    
+    var withHalfWidthDigitsToFullWidth: String {
+        let fullwidthDigits: [[UInt8]] = [
+            [0xEF, 0xBC, 0x90], // '0' -> '０'
+            [0xEF, 0xBC, 0x91], // '1' -> '１'
+            [0xEF, 0xBC, 0x92], // '2' -> '２'
+            [0xEF, 0xBC, 0x93], // '3' -> '３'
+            [0xEF, 0xBC, 0x94], // '4' -> '４'
+            [0xEF, 0xBC, 0x95], // '5' -> '５'
+            [0xEF, 0xBC, 0x96], // '6' -> '６'
+            [0xEF, 0xBC, 0x97], // '7' -> '７'
+            [0xEF, 0xBC, 0x98], // '8' -> '８'
+            [0xEF, 0xBC, 0x99]  // '9' -> '９'
+        ]
+        
+        var resultBytes = [UInt8]()
+        resultBytes.reserveCapacity(self.utf8.count)
+        
+        for byte in self.utf8 {
+            // ASCII '0' to '9'
+            if byte >= 0x30 && byte <= 0x39 {
+                let index = Int(byte - 0x30)
+                resultBytes.append(contentsOf: fullwidthDigits[index])
+            } else {
+                // Non-digit byte - pass through
+                resultBytes.append(byte)
+            }
+        }
+        
+        return String(decoding: resultBytes, as: UTF8.self)
+    }
 }
