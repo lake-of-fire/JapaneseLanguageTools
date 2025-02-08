@@ -14,6 +14,31 @@ private extension Character {
 
 public extension StringProtocol where Self: RangeReplaceableCollection {
     var asciiRepresentation: String { map { $0.isASCII ? .init($0) : $0.hexaValues.joined() }.joined() }
+    
+    func fromAsciiRepresentation() -> String {
+        var result = ""
+        var index = startIndex
+        
+        while index < endIndex {
+            // Check for the two-backslash + "U" prefix
+            if self[index] == "\\" && self[index...].hasPrefix("\\\\U") {
+                // Expecting 11 characters total: "\\" + "U" + 8 hex digits
+                let nextIndex = self.index(index, offsetBy: 11, limitedBy: endIndex) ?? endIndex
+                let unicodeSegment = self[index..<nextIndex]
+                // Drop the first 3 characters ("\\", "\\", and "U")
+                let hexDigits = unicodeSegment.dropFirst(3)
+                if let scalarValue = UInt32(hexDigits, radix: 16),
+                   let scalar = UnicodeScalar(scalarValue) {
+                    result.append(Character(scalar))
+                    index = nextIndex
+                    continue
+                }
+            }
+            result.append(self[index])
+            index = self.index(after: index)
+        }
+        return result
+    }
 }
 
 fileprivate let katakanaRanges = [
