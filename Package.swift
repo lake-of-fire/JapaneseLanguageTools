@@ -13,16 +13,16 @@ let package = Package(
             targets: ["JapaneseLanguageTools"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/lake-of-fire/RealmBinary.git", branch: "main"),
-//                .package(url: "https://github.com/realm/realm-swift.git", from: "10.53.0"),
-                .package(url: "https://github.com/lake-of-fire/BigSyncKit.git", branch: "main"),
+//        .package(url: "https://github.com/lake-of-fire/RealmBinary.git", branch: "main"),
+        .package(url: "https://github.com/realm/realm-swift.git", from: "10.54.4"),
+        .package(url: "https://github.com/lake-of-fire/BigSyncKit.git", branch: "main"),
     ],
     targets: [
         .target(
             name: "JapaneseLanguageTools",
             dependencies: [
-                .product(name: "RealmSwift", package: "RealmBinary"),
-//                .product(name: "RealmSwift", package: "realm-swift"),
+//                .product(name: "RealmSwift", package: "RealmBinary"),
+                .product(name: "RealmSwift", package: "realm-swift"),
                 .product(name: "BigSyncKit", package: "BigSyncKit"),
             ],
             resources: [
