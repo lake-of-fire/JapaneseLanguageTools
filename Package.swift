@@ -33,8 +33,8 @@ let package = Package(
             name: "RealmCSVImporter",
             dependencies: [
                 "JapaneseLanguageTools",
-                .product(name: "RealmSwift", package: "RealmBinary"),
-//                .product(name: "RealmSwift", package: "realm-swift"),
+//                .product(name: "RealmSwift", package: "RealmBinary"),
+                .product(name: "RealmSwift", package: "realm-swift"),
             ]
         )
     ]
