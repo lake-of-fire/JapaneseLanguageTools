@@ -88,7 +88,7 @@ public extension StringProtocol {
             return true
         }
     }
-
+    
     var hasKana: Bool {
         get {
             // https://stackoverflow.com/a/38723951/89373
@@ -136,7 +136,30 @@ public extension StringProtocol {
     }
     
     var distinctKanji: Set<String> {
-        return Set(map { String($0) }.filter { $0.hasKanji })
+        var result = Set<String>()
+        var bytes = Array(utf8)
+        var i = 0
+        while i < bytes.count {
+            if i + 2 < bytes.count,
+               (bytes[i] & 0xF0) == 0xE0,
+               (bytes[i+1] & 0xC0) == 0x80,
+               (bytes[i+2] & 0xC0) == 0x80 {
+                let scalar = (UInt32(bytes[i] & 0x0F) << 12) |
+                (UInt32(bytes[i+1] & 0x3F) << 6) |
+                (UInt32(bytes[i+2] & 0x3F))
+                for (from, to) in kanjiRanges {
+                    if scalar >= from && scalar <= to {
+                        let char = String(decoding: bytes[i...i+2], as: UTF8.self)
+                        result.insert(char)
+                        break
+                    }
+                }
+                i += 3
+            } else {
+                i += 1
+            }
+        }
+        return result
     }
     
     var withHiraganaToKatakana: String {
