@@ -25,6 +25,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
             .publisher(for: NSNotification.Name.AVPlayerItemDidPlayToEndTime)
             .sink { @MainActor [weak self] _ in
                 self?.isPlaying = false
+                JapaneseTTS.unpauseTts()
             }
             .store(in: &cancellables)
         return player
@@ -69,9 +70,9 @@ public class JapaneseTTS: NSObject, ObservableObject {
         }
     }
     
-//    deinit {
-//        isEnabledCheckTask?.cancel()
-//    }
+    //    deinit {
+    //        isEnabledCheckTask?.cancel()
+    //    }
     
     @MainActor
     private func refreshIsEnabled(ignoreTemporaryPause: Bool = false) async -> Bool {
@@ -79,7 +80,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
         isEnabledCheckTask = Task { @MainActor [weak self] () -> Bool in
             try Task.checkCancellation()
             let toSet = Self.ttsEnabled(ignoreTemporaryPause: ignoreTemporaryPause)
-                isEnabled = toSet
+            isEnabled = toSet
             return toSet
         }
         if let isEnabledCheckTask = isEnabledCheckTask {
@@ -97,11 +98,11 @@ public class JapaneseTTS: NSObject, ObservableObject {
     public func toggleTts() async {
         let enabled = await refreshIsEnabled()
         
-        #if os(iOS)
+#if os(iOS)
         if enabled && Mute.shared.isMute {
             Self.wasDeviceMuteOverriddenByUnmutingTts = true
         }
-        #endif
+#endif
         
         if enabled {
             Self.unpauseTts()
@@ -127,12 +128,12 @@ public class JapaneseTTS: NSObject, ObservableObject {
     }
     
     private static func configAudioSession() {
-        #if os(iOS)
+#if os(iOS)
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: .interruptSpokenAudioAndMixWithOthers)
             try AVAudioSession.sharedInstance().setActive(true)
         } catch { }
-        #endif
+#endif
     }
     
     @MainActor
@@ -149,11 +150,11 @@ public class JapaneseTTS: NSObject, ObservableObject {
     }
     
     public func speakSynthesizedJapanese(text: String) {
-//        debugPrint("# speakSynthesizedJapanese", text)
+        //        debugPrint("# speakSynthesizedJapanese", text)
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "ja-JP")
         utterance.volume = 0.9
-//        utterance.rate = 1.3
+        //        utterance.rate = 1.3
         JapaneseTTS.configAudioSession()
         JapaneseTTS.speechSynth.speak(utterance)
     }
@@ -288,12 +289,14 @@ extension JapaneseTTS: AVSpeechSynthesizerDelegate {
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didPause utterance: AVSpeechUtterance) {
         Task { @MainActor in
             isPlaying = false
+            JapaneseTTS.unpauseTts()
         }
     }
     
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         Task { @MainActor in
             isPlaying = false
+            JapaneseTTS.unpauseTts()
         }
     }
     
@@ -311,6 +314,7 @@ extension JapaneseTTS: AVSpeechSynthesizerDelegate {
     
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in
+            JapaneseTTS.unpauseTts()
             isPlaying = false
         }
     }
