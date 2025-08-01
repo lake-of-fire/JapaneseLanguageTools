@@ -49,7 +49,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
     }
     
     @MainActor
-    private class func ttsEnabled(ignoreTemporaryPause: Bool = false) -> Bool {
+    private class func ttsEnabled() -> Bool {
         let ttsTemporarilyPaused = UserDefaults.standard.object(forKey: "ttsTemporarilyPaused") as? Bool
         if ttsTemporarilyPaused == nil {
             UserDefaults.standard.set(false, forKey: "ttsTemporarilyPaused")
@@ -57,9 +57,9 @@ public class JapaneseTTS: NSObject, ObservableObject {
 #if targetEnvironment(simulator)
         return false
 #elseif os(iOS)
-        return (!Mute.shared.isMute || wasDeviceMuteOverriddenByUnmutingTts) && getTtsEnabled() && (ignoreTemporaryPause || !(ttsTemporarilyPaused ?? false))
+        return (!Mute.shared.isMute || wasDeviceMuteOverriddenByUnmutingTts) && getTtsEnabled() && !(ttsTemporarilyPaused ?? false)
 #else
-        return getTtsEnabled() && (ignoreTemporaryPause || !UserDefaults.standard.bool(forKey: "ttsTemporarilyPaused"))
+        return getTtsEnabled() && !UserDefaults.standard.bool(forKey: "ttsTemporarilyPaused")
 #endif
     }
     
@@ -75,15 +75,15 @@ public class JapaneseTTS: NSObject, ObservableObject {
     //    }
     
     @MainActor
-    private func refreshIsEnabled(ignoreTemporaryPause: Bool = false) async -> Bool {
+    private func refreshIsEnabled() async -> Bool {
         isEnabledCheckTask?.cancel()
         isEnabledCheckTask = Task { @MainActor [weak self] () -> Bool in
             try Task.checkCancellation()
-            let toSet = Self.ttsEnabled(ignoreTemporaryPause: ignoreTemporaryPause)
+            let toSet = Self.ttsEnabled()
             isEnabled = toSet
             return toSet
         }
-        if let isEnabledCheckTask = isEnabledCheckTask {
+        if let isEnabledCheckTask {
             do {
                 return try await isEnabledCheckTask.value
             } catch {
@@ -111,13 +111,13 @@ public class JapaneseTTS: NSObject, ObservableObject {
         isEnabled = Self.ttsEnabled()
     }
     
-    public class func muteTts() {
-        UserDefaults.standard.set(false, forKey: "ttsEnabled")
-    }
-    
-    public class func unmuteTts() {
-        UserDefaults.standard.set(false, forKey: "ttsEnabled")
-    }
+//    public class func muteTts() {
+//        UserDefaults.standard.set(false, forKey: "ttsEnabled")
+//    }
+//    
+//    public class func unmuteTts() {
+//        UserDefaults.standard.set(false, forKey: "ttsEnabled")
+//    }
     
     public static func temporarilyPauseTts() {
         UserDefaults.standard.set(true, forKey: "ttsTemporarilyPaused")
@@ -137,6 +137,12 @@ public class JapaneseTTS: NSObject, ObservableObject {
     }
     
     @MainActor
+    public func speakJapaneseIfPlayable(expression: String, readingKana: String? = nil) async {
+        guard await refreshIsEnabled() else { return }
+        speakJapanese(expression: expression, readingKana: readingKana)
+    }
+    
+    @MainActor
     public func speakJapanese(expression: String, readingKana: String? = nil) {
         guard let readingKana = readingKana else {
             speakSynthesizedJapanese(text: hiraganaToKatakana(text: expression))
@@ -149,7 +155,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
         }
     }
     
-    public func speakSynthesizedJapanese(text: String) {
+    private func speakSynthesizedJapanese(text: String) {
         //        debugPrint("# speakSynthesizedJapanese", text)
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "ja-JP")
@@ -160,7 +166,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
     }
     
     /// Helper: katakana is pronounced more accurately for words.
-    public func hiraganaToKatakana(text: String) -> String {
+    private func hiraganaToKatakana(text: String) -> String {
         let kanaMutableString = NSMutableString(string: text) as CFMutableString
         CFStringTransform(kanaMutableString, nil, kCFStringTransformHiraganaKatakana, false)
         var kanaString = kanaMutableString as String
@@ -179,7 +185,7 @@ extension JapaneseTTS {
     // MARK: Audio player
     
     @MainActor
-    public func playAudio(expression: String, readingKana: String) throws {
+    private func playAudio(expression: String, readingKana: String) throws {
         guard TofuguAudioIndex.audioURL(term: expression, readingKana: readingKana) != nil else {
             throw JapaneseTTSError.audioFileDoesNotExist
         }
