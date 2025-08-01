@@ -137,7 +137,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
     }
     
     @MainActor
-    public func speakJapaneseIfPlayable(expression: String, readingKana: String? = nil) async {
+    public func speakJapaneseIfUnmuted(expression: String, readingKana: String? = nil) async {
         guard await refreshIsEnabled() else { return }
         speakJapanese(expression: expression, readingKana: readingKana)
     }
