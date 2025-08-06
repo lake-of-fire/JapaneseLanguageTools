@@ -1,7 +1,7 @@
 import Foundation
 import RealmSwift
 
-public class TofuguAudioIndex: Object {
+public class TofuguAudioIndex: RealmSwift.Object {
     @Persisted(primaryKey: true) public var term: String = ""
     @Persisted public var values: String = ""
 
