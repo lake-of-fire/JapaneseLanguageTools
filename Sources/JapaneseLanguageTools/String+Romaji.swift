@@ -39,7 +39,7 @@ public extension String {
         }
         return str
     }
-
+    
     private static func nCheck(_ str: String) -> String {
         switch str.lowercased() {
         case "na": return str
@@ -52,11 +52,11 @@ public extension String {
         default: return str
         }
     }
-
+    
     private static func isRoman(_ str: String) -> Bool {
         return NSPredicate(format: "SELF MATCHES %@", "[a-zA-Z]+").evaluate(with: str)
     }
-
+    
     private static func xtuCheck(_ str: String) -> String {
         let c0 = str.first!.lowercased()
         let c1 = String(str.last!)
@@ -69,7 +69,7 @@ public extension String {
         }
         return str
     }
-
+    
     private static func convert(_ str: String) -> String {
         switch str.count {
         case 1:
@@ -99,7 +99,7 @@ public extension String {
             return str
         }
     }
-
+    
     private static func one(_ str: String) -> String {
         switch str.lowercased() {
         case "a": return "あ"
@@ -154,7 +154,7 @@ public extension String {
         default: return str
         }
     }
-
+    
     private static func two(_ str: String) -> String {
         switch str.lowercased() {
         case "ba": return "ば"
@@ -192,11 +192,6 @@ public extension String {
         case "ku": return "く"
         case "ke": return "け"
         case "ko": return "こ"
-        case "la": return "ぁ"
-        case "li": return "ぃ"
-        case "lu": return "ぅ"
-        case "le": return "ぇ"
-        case "lo": return "ぉ"
         case "ma": return "ま"
         case "mi": return "み"
         case "mu": return "む"
@@ -258,7 +253,7 @@ public extension String {
         default: return str
         }
     }
-
+    
     private static func threeY(_ str: String) -> String {
         func yaiueo(head: String, str: String) -> String {
             switch str.lowercased() {
@@ -299,7 +294,7 @@ public extension String {
             }
         }
     }
-
+    
     private static func threeH(_ str: String) -> String {
         switch str.lowercased() {
         case "cha": return "ちゃ"
@@ -330,7 +325,7 @@ public extension String {
         default: return str
         }
     }
-
+    
     private static func threeW(_ str: String) -> String {
         switch str.lowercased() {
         case "dwa": return "どぁ"
@@ -363,5 +358,233 @@ public extension String {
         default: return str
         }
     }
-
+    
+    /// Converts Hiragana **and** Katakana to romaji.
+    /// - Notes:
+    ///   - Mirrors the same scheme accepted by `withRomajiToHiragana` so round‑trips are predictable.
+    ///   - Prefers Nihon-shiki style forms used in this file’s forward mapping (e.g. `si/ti/tu`, `sya/tya`).
+    ///   - Handles sokuon (っ) by doubling the following consonant, chōonpu (ー) as `-`, and `ん` as `n` or `n'` before vowels/`y`.
+    var withKanaToRomaji: String {
+        let src = Self.normalizeToHiragana(self)
+        var out = ""
+        var i = src.startIndex
+        var pendingSokuon = false
+        
+        while i < src.endIndex {
+            let ch = src[i]
+            
+            // Prolonged sound mark: repeat previous vowel (e.g., スーパー -> suupaa). If none, drop the mark.
+            if ch == "ー" {
+                // Repeat the previous vowel (e.g., スーパー -> suupaa). If none, drop the mark.
+                if let v = out.last(where: { "aeiouAEIOU".contains($0) }) {
+                    out.append(v)
+                }
+                i = src.index(after: i)
+                continue
+            }
+            
+            // Small tsu (sokuon) -> hold for next syllable
+            if ch == "っ" {
+                pendingSokuon = true
+                i = src.index(after: i)
+                continue
+            }
+            
+            // 'n' syllable
+            if ch == "ん" {
+                // Look ahead to decide between "n" and "n'"
+                if let first = Self.peekNextRomajiFirst(hiragana: src, from: src.index(after: i)),
+                   "aiueoyAIUEOY".contains(first) {
+                    out += "n'"
+                } else {
+                    out += "n"
+                }
+                i = src.index(after: i)
+                continue
+            }
+            
+            // Punctuation and zenkaku symbols back to ASCII
+            if let mapped = Self.kanaPunctToAscii[ch] {
+                out += mapped
+                i = src.index(after: i)
+                continue
+            }
+            
+            // Try two-char kana sequences first (yoon & special digraphs)
+            var consumed = false
+            if let j = src.index(i, offsetBy: 1, limitedBy: src.endIndex), j < src.endIndex {
+                let two = String(src[i...j])
+                if var romaji = Self.kanaToRomajiTwo[two] {
+                    if pendingSokuon {
+                        romaji = Self.applySokuon(to: romaji)
+                        pendingSokuon = false
+                    }
+                    out += romaji
+                    i = src.index(after: j)
+                    consumed = true
+                }
+            }
+            if consumed { continue }
+            
+            // Single kana
+            let one = String(ch)
+            if var romaji = Self.kanaToRomajiOne[one] {
+                if pendingSokuon {
+                    romaji = Self.applySokuon(to: romaji)
+                    pendingSokuon = false
+                }
+                out += romaji
+                i = src.index(after: i)
+                continue
+            }
+            
+            // Unknown character (kanji/latin/etc.) – emit as-is
+            out.append(ch)
+            i = src.index(after: i)
+        }
+        
+        // Trailing sokuon with no following kana (rare) -> "xtu" for symmetry with forward mapping.
+        if pendingSokuon { out += "xtu" }
+        
+        return out
+    }
+    
+    // MARK: - Kana -> Romaji tables (mirror forward mapping choices)
+    
+    private static let kanaToRomajiTwo: [String: String] = {
+        var m: [String: String] = [:]
+        
+        // Yoon (contracted) syllables
+        let base: [(String, String)] = [
+            ("きゃ","kya"),("きゅ","kyu"),("きょ","kyo"),
+            ("ぎゃ","gya"),("ぎゅ","gyu"),("ぎょ","gyo"),
+            ("しゃ","sya"),("しゅ","syu"),("しょ","syo"),
+            ("じゃ","zya"),("じゅ","zyu"),("じょ","zyo"),
+            ("ちゃ","cha"),("ちゅ","chu"),("ちょ","cho"),
+            ("にゃ","nya"),("にゅ","nyu"),("にょ","nyo"),
+            ("ひゃ","hya"),("ひゅ","hyu"),("ひょ","hyo"),
+            ("びゃ","bya"),("びゅ","byu"),("びょ","byo"),
+            ("ぴゃ","pya"),("ぴゅ","pyu"),("ぴょ","pyo"),
+            ("みゃ","mya"),("みゅ","myu"),("みょ","myo"),
+            ("りゃ","rya"),("りゅ","ryu"),("りょ","ryo")
+        ]
+        base.forEach { m[$0.0] = $0.1 }
+        
+        // She/che/je
+        m["しぇ"] = "she"
+        m["ちぇ"] = "che"
+        m["じぇ"] = "je"
+        
+        // Thi/dhi/thu/dhu + the/dhe/tho/dho
+        m["てぃ"] = "thi"; m["でぃ"] = "dhi"
+        m["てゅ"] = "thu"; m["でゅ"] = "dhu"
+        m["てゃ"] = "tha"; m["でゃ"] = "dha"
+        m["てぇ"] = "the"; m["でぇ"] = "dhe"
+        m["てょ"] = "tho"; m["でょ"] = "dho"
+        
+        // Fa/fi/fe/fo
+        m["ふぁ"] = "fa"; m["ふぃ"] = "fi"; m["ふぇ"] = "fe"; m["ふぉ"] = "fo"
+        
+        // Vu family
+        m["ゔぁ"] = "va"; m["ゔぃ"] = "vi"; m["ゔ"] = "vu"; m["ゔぇ"] = "ve"; m["ゔぉ"] = "vo"
+        
+        // Tsa/tsi/tse/tso
+        m["つぁ"] = "tsa"; m["つぃ"] = "tsi"; m["つぇ"] = "tse"; m["つぉ"] = "tso"
+        
+        // Wh‑ series (maps seen in threeH)
+        m["うぁ"] = "wha"; m["うぃ"] = "whi"; m["うぇ"] = "whe"; m["うぉ"] = "who"
+        
+        // W‑ combos from threeW (kwa/gwa/swa/twa/dwa etc.)
+        m["くぁ"] = "kwa"; m["くぃ"] = "kwi"; m["くぅ"] = "kwu"; m["くぇ"] = "kwe"; m["くぉ"] = "kwo"
+        m["ぐぁ"] = "gwa"; m["ぐぃ"] = "gwi"; m["ぐぅ"] = "gwu"; m["ぐぇ"] = "gwe"; m["ぐぉ"] = "gwo"
+        m["すぁ"] = "swa"; m["すぃ"] = "swi"; m["すぅ"] = "swu"; m["すぇ"] = "swe"; m["すぉ"] = "swo"
+        m["とぁ"] = "twa"; m["とぃ"] = "twi"; m["とぅ"] = "twu"; m["とぇ"] = "twe"; m["とぉ"] = "two"
+        m["どぁ"] = "dwa"; m["どぃ"] = "dwi"; m["どぅ"] = "dwu"; m["どぇ"] = "dwe"; m["どぉ"] = "dwo"
+        
+        // Small vowels combos often used alone
+        m["ゎ"] = "xwa"
+        
+        return m
+    }()
+    
+    private static let kanaToRomajiOne: [String: String] = [
+        // Basic vowels
+        "あ":"a","い":"i","う":"u","え":"e","お":"o",
+        // K
+        "か":"ka","き":"ki","く":"ku","け":"ke","こ":"ko",
+        "が":"ga","ぎ":"gi","ぐ":"gu","げ":"ge","ご":"go",
+        // S
+        "さ":"sa","し":"si","す":"su","せ":"se","そ":"so",
+        "ざ":"za","じ":"zi","ず":"zu","ぜ":"ze","ぞ":"zo",
+        // T
+        "た":"ta","ち":"chi","つ":"tsu","て":"te","と":"to",
+        "だ":"da","ぢ":"di","づ":"du","で":"de","ど":"do",
+        // N
+        "な":"na","に":"ni","ぬ":"nu","ね":"ne","の":"no",
+        // H
+        "は":"ha","ひ":"hi","ふ":"fu","へ":"he","ほ":"ho",
+        "ば":"ba","び":"bi","ぶ":"bu","べ":"be","ぼ":"bo",
+        "ぱ":"pa","ぴ":"pi","ぷ":"pu","ぺ":"pe","ぽ":"po",
+        // M
+        "ま":"ma","み":"mi","む":"mu","め":"me","も":"mo",
+        // Y
+        "や":"ya","ゆ":"yu","よ":"yo",
+        // R
+        "ら":"ra","り":"ri","る":"ru","れ":"re","ろ":"ro",
+        // W and historical kana
+        "わ":"wa","ゐ":"wyi","ゑ":"wye","を":"wo",
+        // Vu
+        "ゔ":"vu",
+        // Small vowels & small y/w
+        "ぁ":"xa","ぃ":"xi","ぅ":"xu","ぇ":"xe","ぉ":"xo",
+        "ゃ":"xya","ゅ":"xyu","ょ":"xyo","ゎ":"xwa"
+    ]
+    
+    private static let kanaPunctToAscii: [Character: String] = [
+        "。":".","、":",","！":"!","？":"?","：":":","；":";",
+        "（":"(","）":")","「":"[","」":"]","『":"{","』":"}",
+        "＋":"+","＊":"*","／":"/","＼":"\\","｜":"|","＾":"^",
+        "＝":"=","＿":"_","＠":"@","’":"'","”":"\"","｀":"`",
+        "〜":"~","＃":"#","＄":"$","％":"%","＆":"&","＜":"<","＞":">",
+        "　":" "
+    ]
+    
+    // Apply sokuon by doubling the first consonant; if none, fall back to "xtu".
+    private static func applySokuon(to romaji: String) -> String {
+        guard let idx = romaji.firstIndex(where: { $0.isLetter }) else { return "xtu" + romaji }
+        let c = romaji[idx]
+        if "aeiouAEIOU".contains(c) {
+            return "xtu" + romaji
+        } else {
+            return String(c) + romaji
+        }
+    }
+    
+    // Normalize: katakana -> hiragana (preserve 'ー'); leave others intact.
+    private static func normalizeToHiragana(_ s: String) -> String {
+        var out = String.UnicodeScalarView()
+        out.reserveCapacity(s.unicodeScalars.count)
+        for scalar in s.unicodeScalars {
+            let v = scalar.value
+            // Katakana U+30A1...U+30F6 -> Hiragana U+3041...U+3096
+            if v >= 0x30A1 && v <= 0x30F6 {
+                out.append(UnicodeScalar(v - 0x60)!)
+            } else {
+                out.append(scalar)
+            }
+        }
+        return String(out)
+    }
+    
+    // Peek the first romaji character of the next kana chunk (for deciding "n'").
+    private static func peekNextRomajiFirst(hiragana: String, from idx: String.Index) -> Character? {
+        guard idx < hiragana.endIndex else { return nil }
+        if let j = hiragana.index(idx, offsetBy: 1, limitedBy: hiragana.endIndex), j < hiragana.endIndex {
+            let two = String(hiragana[idx...j])
+            if let r = kanaToRomajiTwo[two], let f = r.first { return f }
+        }
+        let one = String(hiragana[idx])
+        if let r = kanaToRomajiOne[one], let f = r.first { return f }
+        return nil
+    }
 }

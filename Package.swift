@@ -29,6 +29,10 @@ let package = Package(
                 .copy("Resources/tofugu-audio-index.realm"),
             ]
         ),
+        .testTarget(
+            name: "JapaneseLanguageToolsTests",
+            dependencies: ["JapaneseLanguageTools"]
+        ),
         .executableTarget(
             name: "RealmCSVImporter",
             dependencies: [
