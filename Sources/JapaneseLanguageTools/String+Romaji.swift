@@ -8,6 +8,128 @@
 //
 import Foundation
 
+private enum UnicodeScalarConstants {
+    static let katakanaStart: UInt32 = 0x30A1
+    static let katakanaEnd: UInt32 = 0x30F6
+    static let kanaShift: UInt32 = 0x60
+    static let utf8TwoByteMaxScalar: UInt32 = 0x7FF
+    static let utf8ThreeByteMaxScalar: UInt32 = 0xFFFF
+}
+
+private enum UTF8Constants {
+    static let asciiMax: UInt8 = 0x7F
+    static let twoByteLeadMax: UInt8 = 0xDF
+    static let threeByteLeadMax: UInt8 = 0xEF
+    static let fourByteLeadMax: UInt8 = 0xF7
+
+    static let continuationMask: UInt8 = 0xC0
+    static let continuationExpected: UInt8 = 0x80
+
+    static let twoByteLeadMask: UInt8 = 0x1F
+    static let threeByteLeadMask: UInt8 = 0x0F
+    static let fourByteLeadMask: UInt8 = 0x07
+    static let sixBitMask: UInt8 = 0x3F
+
+    static let twoByteLeadBase: UInt8 = 0xC0
+    static let threeByteLeadBase: UInt8 = 0xE0
+    static let fourByteLeadBase: UInt8 = 0xF0
+}
+
+@inline(__always)
+private func withUTF8Buffer<S: StringProtocol, R>(_ string: S, _ body: (UnsafeBufferPointer<UInt8>) -> R) -> R {
+    if let result = string.utf8.withContiguousStorageIfAvailable({ buffer in
+        body(buffer)
+    }) {
+        return result
+    }
+    var bytes = Array(string.utf8)
+    return bytes.withUnsafeBufferPointer { buffer in
+        body(buffer)
+    }
+}
+
+@inline(__always)
+private func isContinuationByte(_ byte: UInt8) -> Bool {
+    (byte & UTF8Constants.continuationMask) == UTF8Constants.continuationExpected
+}
+
+@inline(__always)
+private func decodeUTF8Scalar(
+    in buffer: UnsafeBufferPointer<UInt8>,
+    at index: Int
+) -> (scalar: UInt32, length: Int)? {
+    let count = buffer.count
+    let byte0 = buffer[index]
+
+    if byte0 <= UTF8Constants.asciiMax {
+        return (UInt32(byte0), 1)
+    }
+
+    if byte0 <= UTF8Constants.twoByteLeadMax {
+        let nextIndex = index + 1
+        if nextIndex >= count { return nil }
+        let byte1 = buffer[nextIndex]
+        if !isContinuationByte(byte1) { return nil }
+        let scalar = (UInt32(byte0 & UTF8Constants.twoByteLeadMask) << 6)
+            | UInt32(byte1 & UTF8Constants.sixBitMask)
+        return (scalar, 2)
+    }
+
+    if byte0 <= UTF8Constants.threeByteLeadMax {
+        let nextIndex = index + 2
+        if nextIndex >= count { return nil }
+        let byte1 = buffer[index + 1]
+        let byte2 = buffer[index + 2]
+        if !isContinuationByte(byte1) || !isContinuationByte(byte2) { return nil }
+        let scalar = (UInt32(byte0 & UTF8Constants.threeByteLeadMask) << 12)
+            | (UInt32(byte1 & UTF8Constants.sixBitMask) << 6)
+            | UInt32(byte2 & UTF8Constants.sixBitMask)
+        return (scalar, 3)
+    }
+
+    if byte0 <= UTF8Constants.fourByteLeadMax {
+        let nextIndex = index + 3
+        if nextIndex >= count { return nil }
+        let byte1 = buffer[index + 1]
+        let byte2 = buffer[index + 2]
+        let byte3 = buffer[index + 3]
+        if !isContinuationByte(byte1) || !isContinuationByte(byte2) || !isContinuationByte(byte3) { return nil }
+        let scalar = (UInt32(byte0 & UTF8Constants.fourByteLeadMask) << 18)
+            | (UInt32(byte1 & UTF8Constants.sixBitMask) << 12)
+            | (UInt32(byte2 & UTF8Constants.sixBitMask) << 6)
+            | UInt32(byte3 & UTF8Constants.sixBitMask)
+        return (scalar, 4)
+    }
+
+    return nil
+}
+
+@inline(__always)
+private func encodeUTF8Scalar(_ scalar: UInt32, into output: inout [UInt8]) {
+    if scalar <= UInt32(UTF8Constants.asciiMax) {
+        output.append(UInt8(scalar))
+        return
+    }
+
+    if scalar <= UnicodeScalarConstants.utf8TwoByteMaxScalar {
+        output.append(UTF8Constants.twoByteLeadBase | UInt8((scalar >> 6) & UInt32(UTF8Constants.twoByteLeadMask)))
+        output.append(UTF8Constants.continuationExpected | UInt8(scalar & UInt32(UTF8Constants.sixBitMask)))
+        return
+    }
+
+    if scalar <= UnicodeScalarConstants.utf8ThreeByteMaxScalar {
+        output.append(UTF8Constants.threeByteLeadBase | UInt8((scalar >> 12) & UInt32(UTF8Constants.threeByteLeadMask)))
+        output.append(UTF8Constants.continuationExpected | UInt8((scalar >> 6) & UInt32(UTF8Constants.sixBitMask)))
+        output.append(UTF8Constants.continuationExpected | UInt8(scalar & UInt32(UTF8Constants.sixBitMask)))
+        return
+    }
+
+    output.append(UTF8Constants.fourByteLeadBase | UInt8((scalar >> 18) & UInt32(UTF8Constants.fourByteLeadMask)))
+    output.append(UTF8Constants.continuationExpected | UInt8((scalar >> 12) & UInt32(UTF8Constants.sixBitMask)))
+    output.append(UTF8Constants.continuationExpected | UInt8((scalar >> 6) & UInt32(UTF8Constants.sixBitMask)))
+    output.append(UTF8Constants.continuationExpected | UInt8(scalar & UInt32(UTF8Constants.sixBitMask)))
+}
+
 public extension String {
     var withRomajiToHiragana: String {
         var str = self
@@ -562,18 +684,29 @@ public extension String {
     
     // Normalize: katakana -> hiragana (preserve 'ー'); leave others intact.
     private static func normalizeToHiragana(_ s: String) -> String {
-        var out = String.UnicodeScalarView()
-        out.reserveCapacity(s.unicodeScalars.count)
-        for scalar in s.unicodeScalars {
-            let v = scalar.value
-            // Katakana U+30A1...U+30F6 -> Hiragana U+3041...U+3096
-            if v >= 0x30A1 && v <= 0x30F6 {
-                out.append(UnicodeScalar(v - 0x60)!)
-            } else {
-                out.append(scalar)
+        return withUTF8Buffer(s) { buffer in
+            var out = [UInt8]()
+            out.reserveCapacity(buffer.count)
+            var index = 0
+            let count = buffer.count
+
+            while index < count {
+                if let decoded = decodeUTF8Scalar(in: buffer, at: index) {
+                    var scalar = decoded.scalar
+                    if scalar >= UnicodeScalarConstants.katakanaStart
+                        && scalar <= UnicodeScalarConstants.katakanaEnd {
+                        scalar -= UnicodeScalarConstants.kanaShift
+                    }
+                    encodeUTF8Scalar(scalar, into: &out)
+                    index += decoded.length
+                } else {
+                    out.append(buffer[index])
+                    index += 1
+                }
             }
+
+            return String(decoding: out, as: UTF8.self)
         }
-        return String(out)
     }
     
     // Peek the first romaji character of the next kana chunk (for deciding "n'").

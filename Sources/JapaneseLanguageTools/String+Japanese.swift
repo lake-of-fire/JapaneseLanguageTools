@@ -1,24 +1,247 @@
 import Foundation
 
-private extension Unicode.Scalar {
-    var hexa: String { .init(value, radix: 16, uppercase: true) }
+private enum UnicodeScalarConstants {
+    static let unicodeScalarHexWidth = 8
+
+    static let hiraganaStart: UInt32 = 0x3041
+    static let hiraganaEnd: UInt32 = 0x3096
+    static let hiraganaIterationStart: UInt32 = 0x309D
+    static let hiraganaIterationEnd: UInt32 = 0x309F
+
+    static let katakanaStart: UInt32 = 0x30A1
+    static let katakanaEnd: UInt32 = 0x30FA
+    static let katakanaToHiraganaEnd: UInt32 = 0x30F6
+    static let katakanaProlongedStart: UInt32 = 0x30FC
+    static let katakanaProlongedEnd: UInt32 = 0x30FF
+
+    static let halfWidthKatakanaStart: UInt32 = 0xFF66
+    static let halfWidthKatakanaEnd: UInt32 = 0xFF9D
+
+    static let kanaShift: UInt32 = 0x60
+
+    static let kanjiCommonStart: UInt32 = 0x4E00
+    static let kanjiCommonEnd: UInt32 = 0x9FFF
+    static let kanjiExtensionAStart: UInt32 = 0x3400
+    static let kanjiExtensionAEnd: UInt32 = 0x4DFF
+    static let kanjiExtensionBStart: UInt32 = 0x20000
+    static let kanjiExtensionBEnd: UInt32 = 0x2A6DF
+    static let kanjiCompatibilityStart: UInt32 = 0xF900
+    static let kanjiCompatibilityEnd: UInt32 = 0xFAFF
+    static let kanjiCompatibilitySupplementStart: UInt32 = 0x2F800
+    static let kanjiCompatibilitySupplementEnd: UInt32 = 0x2FA1F
+
+    static let fullWidthDigitZero: UInt32 = 0xFF10
+    static let fullWidthDigitNine: UInt32 = 0xFF19
+
+    static let utf8TwoByteMaxScalar: UInt32 = 0x7FF
+    static let utf8ThreeByteMaxScalar: UInt32 = 0xFFFF
+}
+
+private enum UTF8Constants {
+    static let asciiMax: UInt8 = 0x7F
+    static let asciiZero: UInt8 = 0x30
+    static let asciiNine: UInt8 = 0x39
+
+    static let twoByteLeadMax: UInt8 = 0xDF
+    static let threeByteLeadMax: UInt8 = 0xEF
+    static let fourByteLeadMax: UInt8 = 0xF7
+
+    static let continuationMask: UInt8 = 0xC0
+    static let continuationExpected: UInt8 = 0x80
+
+    static let twoByteLeadMask: UInt8 = 0x1F
+    static let threeByteLeadMask: UInt8 = 0x0F
+    static let fourByteLeadMask: UInt8 = 0x07
+    static let sixBitMask: UInt8 = 0x3F
+
+    static let twoByteLeadBase: UInt8 = 0xC0
+    static let threeByteLeadBase: UInt8 = 0xE0
+    static let fourByteLeadBase: UInt8 = 0xF0
+}
+
+private extension UInt32 {
+    var hexa: String { .init(self, radix: 16, uppercase: true) }
+}
+
+@inline(__always)
+private func withUTF8Buffer<S: StringProtocol, R>(_ string: S, _ body: (UnsafeBufferPointer<UInt8>) -> R) -> R {
+    if let result = string.utf8.withContiguousStorageIfAvailable({ buffer in
+        body(buffer)
+    }) {
+        return result
+    }
+    var bytes = Array(string.utf8)
+    return bytes.withUnsafeBufferPointer { buffer in
+        body(buffer)
+    }
+}
+
+@inline(__always)
+private func isContinuationByte(_ byte: UInt8) -> Bool {
+    (byte & UTF8Constants.continuationMask) == UTF8Constants.continuationExpected
+}
+
+@inline(__always)
+private func decodeUTF8Scalar(
+    in buffer: UnsafeBufferPointer<UInt8>,
+    at index: Int
+) -> (scalar: UInt32, length: Int)? {
+    let count = buffer.count
+    let byte0 = buffer[index]
+
+    if byte0 <= UTF8Constants.asciiMax {
+        return (UInt32(byte0), 1)
+    }
+
+    if byte0 <= UTF8Constants.twoByteLeadMax {
+        let nextIndex = index + 1
+        if nextIndex >= count { return nil }
+        let byte1 = buffer[nextIndex]
+        if !isContinuationByte(byte1) { return nil }
+        let scalar = (UInt32(byte0 & UTF8Constants.twoByteLeadMask) << 6)
+            | UInt32(byte1 & UTF8Constants.sixBitMask)
+        return (scalar, 2)
+    }
+
+    if byte0 <= UTF8Constants.threeByteLeadMax {
+        let nextIndex = index + 2
+        if nextIndex >= count { return nil }
+        let byte1 = buffer[index + 1]
+        let byte2 = buffer[index + 2]
+        if !isContinuationByte(byte1) || !isContinuationByte(byte2) { return nil }
+        let scalar = (UInt32(byte0 & UTF8Constants.threeByteLeadMask) << 12)
+            | (UInt32(byte1 & UTF8Constants.sixBitMask) << 6)
+            | UInt32(byte2 & UTF8Constants.sixBitMask)
+        return (scalar, 3)
+    }
+
+    if byte0 <= UTF8Constants.fourByteLeadMax {
+        let nextIndex = index + 3
+        if nextIndex >= count { return nil }
+        let byte1 = buffer[index + 1]
+        let byte2 = buffer[index + 2]
+        let byte3 = buffer[index + 3]
+        if !isContinuationByte(byte1) || !isContinuationByte(byte2) || !isContinuationByte(byte3) { return nil }
+        let scalar = (UInt32(byte0 & UTF8Constants.fourByteLeadMask) << 18)
+            | (UInt32(byte1 & UTF8Constants.sixBitMask) << 12)
+            | (UInt32(byte2 & UTF8Constants.sixBitMask) << 6)
+            | UInt32(byte3 & UTF8Constants.sixBitMask)
+        return (scalar, 4)
+    }
+
+    return nil
+}
+
+@inline(__always)
+private func forEachUTF8Scalar(in buffer: UnsafeBufferPointer<UInt8>, _ body: (UInt32) -> Void) {
+    var index = 0
+    let count = buffer.count
+    while index < count {
+        if let decoded = decodeUTF8Scalar(in: buffer, at: index) {
+            body(decoded.scalar)
+            index += decoded.length
+        } else {
+            index += 1
+        }
+    }
+}
+
+@inline(__always)
+private func containsUTF8Scalar(in buffer: UnsafeBufferPointer<UInt8>, _ predicate: (UInt32) -> Bool) -> Bool {
+    var index = 0
+    let count = buffer.count
+    while index < count {
+        if let decoded = decodeUTF8Scalar(in: buffer, at: index) {
+            if predicate(decoded.scalar) { return true }
+            index += decoded.length
+        } else {
+            index += 1
+        }
+    }
+    return false
+}
+
+@inline(__always)
+private func allUTF8ScalarsSatisfy(in buffer: UnsafeBufferPointer<UInt8>, _ predicate: (UInt32) -> Bool) -> Bool {
+    var index = 0
+    let count = buffer.count
+    while index < count {
+        if let decoded = decodeUTF8Scalar(in: buffer, at: index) {
+            if !predicate(decoded.scalar) { return false }
+            index += decoded.length
+        } else {
+            return false
+        }
+    }
+    return true
+}
+
+@inline(__always)
+private func encodeUTF8Scalar(_ scalar: UInt32, into output: inout [UInt8]) {
+    if scalar <= UInt32(UTF8Constants.asciiMax) {
+        output.append(UInt8(scalar))
+        return
+    }
+
+    if scalar <= UnicodeScalarConstants.utf8TwoByteMaxScalar {
+        output.append(UTF8Constants.twoByteLeadBase | UInt8((scalar >> 6) & UInt32(UTF8Constants.twoByteLeadMask)))
+        output.append(UTF8Constants.continuationExpected | UInt8(scalar & UInt32(UTF8Constants.sixBitMask)))
+        return
+    }
+
+    if scalar <= UnicodeScalarConstants.utf8ThreeByteMaxScalar {
+        output.append(UTF8Constants.threeByteLeadBase | UInt8((scalar >> 12) & UInt32(UTF8Constants.threeByteLeadMask)))
+        output.append(UTF8Constants.continuationExpected | UInt8((scalar >> 6) & UInt32(UTF8Constants.sixBitMask)))
+        output.append(UTF8Constants.continuationExpected | UInt8(scalar & UInt32(UTF8Constants.sixBitMask)))
+        return
+    }
+
+    output.append(UTF8Constants.fourByteLeadBase | UInt8((scalar >> 18) & UInt32(UTF8Constants.fourByteLeadMask)))
+    output.append(UTF8Constants.continuationExpected | UInt8((scalar >> 12) & UInt32(UTF8Constants.sixBitMask)))
+    output.append(UTF8Constants.continuationExpected | UInt8((scalar >> 6) & UInt32(UTF8Constants.sixBitMask)))
+    output.append(UTF8Constants.continuationExpected | UInt8(scalar & UInt32(UTF8Constants.sixBitMask)))
+}
+
+@inline(__always)
+private func isKanaScalar(_ scalar: UInt32) -> Bool {
+    if scalar >= UnicodeScalarConstants.hiraganaStart && scalar <= UnicodeScalarConstants.hiraganaEnd { return true }
+    if scalar >= UnicodeScalarConstants.hiraganaIterationStart && scalar <= UnicodeScalarConstants.hiraganaIterationEnd { return true }
+    if scalar >= UnicodeScalarConstants.katakanaStart && scalar <= UnicodeScalarConstants.katakanaEnd { return true }
+    if scalar >= UnicodeScalarConstants.katakanaProlongedStart && scalar <= UnicodeScalarConstants.katakanaProlongedEnd { return true }
+    if scalar >= UnicodeScalarConstants.halfWidthKatakanaStart && scalar <= UnicodeScalarConstants.halfWidthKatakanaEnd { return true }
+    return false
+}
+
+@inline(__always)
+private func isKatakanaScalar(_ scalar: UInt32) -> Bool {
+    if scalar >= UnicodeScalarConstants.katakanaStart && scalar <= UnicodeScalarConstants.katakanaEnd { return true }
+    if scalar >= UnicodeScalarConstants.katakanaProlongedStart && scalar <= UnicodeScalarConstants.katakanaProlongedEnd { return true }
+    if scalar >= UnicodeScalarConstants.halfWidthKatakanaStart && scalar <= UnicodeScalarConstants.halfWidthKatakanaEnd { return true }
+    return false
 }
 
 private extension Character {
     var hexaValues: [String] {
-        unicodeScalars
-            .map(\.hexa)
-            .map { #"\\U"# + repeatElement("0", count: 8-$0.count) + $0 }
+        var values = [String]()
+        let stringValue = String(self)
+        withUTF8Buffer(stringValue) { buffer in
+            forEachUTF8Scalar(in: buffer) { scalar in
+                let hexa = scalar.hexa
+                let paddingCount = UnicodeScalarConstants.unicodeScalarHexWidth - hexa.count
+                values.append("\\\\U" + String(repeating: "0", count: paddingCount) + hexa)
+            }
+        }
+        return values
     }
 }
 
 public extension StringProtocol where Self: RangeReplaceableCollection {
     var asciiRepresentation: String { map { $0.isASCII ? .init($0) : $0.hexaValues.joined() }.joined() }
-    
+
     func fromAsciiRepresentation() -> String {
         var result = ""
         var index = startIndex
-        
+
         while index < endIndex {
             // Check for the two-backslash + "U" prefix
             if self[index] == "\\" && self[index...].hasPrefix("\\\\U") {
@@ -41,12 +264,6 @@ public extension StringProtocol where Self: RangeReplaceableCollection {
     }
 }
 
-fileprivate let katakanaRanges = [
-    0x30a1...0x30fa,
-    0x30fc...0x30ff,
-    0xff66...0xff9d
-]
-
 // CJK Unified Ideographs                   4E00-9FFF   Common
 //                                          19968-40959
 // CJK Unified Ideographs Extension A       3400-4DFF   Rare
@@ -57,205 +274,143 @@ fileprivate let katakanaRanges = [
 //                                          63744-64255
 // CJK Compatibility Ideographs Supplement  2F800-2FA1F Unifiable variants
 //                                          194560-195103
-fileprivate let kanjiRanges = [(19968, 40959), (13312, 19967), (131072, 173791), (63744, 64255), (194560, 195103)]
+fileprivate let kanjiRanges: [ClosedRange<UInt32>] = [
+    UnicodeScalarConstants.kanjiCommonStart...UnicodeScalarConstants.kanjiCommonEnd,
+    UnicodeScalarConstants.kanjiExtensionAStart...UnicodeScalarConstants.kanjiExtensionAEnd,
+    UnicodeScalarConstants.kanjiExtensionBStart...UnicodeScalarConstants.kanjiExtensionBEnd,
+    UnicodeScalarConstants.kanjiCompatibilityStart...UnicodeScalarConstants.kanjiCompatibilityEnd,
+    UnicodeScalarConstants.kanjiCompatibilitySupplementStart...UnicodeScalarConstants.kanjiCompatibilitySupplementEnd
+]
 
 public extension StringProtocol {
     var isKana: Bool {
-        // https://stackoverflow.com/a/38723951/89373
-        for scalar in unicodeScalars {
-            switch scalar.value {
-            case 0x3041...0x3096, 0x309D...0x309F, // Hiragana ranges
-                0x30A1...0x30FA, 0x30FC...0x30FF, // Katakana ranges
-                0xFF66...0xFF9D: // Half-width Katakana ranges
-                continue
-            default:
-                return false
-            }
-        }
         guard !isEmpty else { return false }
-        return true
+        return withUTF8Buffer(self) { buffer in
+            allUTF8ScalarsSatisfy(in: buffer) { isKanaScalar($0) }
+        }
     }
-    
+
     var isKatakana: Bool {
-        get {
-            if isEmpty { return false }
-            // https://stackoverflow.com/a/38723951/89373
-            for scalar in unicodeScalars {
-                if !katakanaRanges.contains(where: { $0 ~= Int(scalar.value) }) {
-                    return false
-                }
-            }
-            return true
+        if isEmpty { return false }
+        return withUTF8Buffer(self) { buffer in
+            allUTF8ScalarsSatisfy(in: buffer) { isKatakanaScalar($0) }
         }
     }
-    
+
     var hasKana: Bool {
-        get {
-            // https://stackoverflow.com/a/38723951/89373
-            for scalar in unicodeScalars {
-                switch scalar.value {
-                case 0x3041...0x3096, 0x309D...0x309F, // Hiragana ranges
-                    0x30A1...0x30FA, 0x30FC...0x30FF, // Katakana ranges
-                    0xFF66...0xFF9D: // Half-width Katakana ranges
-                    return true
-                default:
-                    continue
-                }
-            }
-            return false
+        return withUTF8Buffer(self) { buffer in
+            containsUTF8Scalar(in: buffer) { isKanaScalar($0) }
         }
     }
-    
+
     var isKanji: Bool {
-        get {
-            return (
-                !unicodeScalars.isEmpty
-                && unicodeScalars.allSatisfy {
-                    for (from, to) in kanjiRanges {
-                        if $0.value >= UInt32(from) && $0.value <= UInt32(to) {
-                            return true
-                        }
-                    }
-                    return false
-                }
-            )
-        }
-    }
-    
-    var hasKanji: Bool {
-        get {
-            for scalar in unicodeScalars {
-                for (from, to) in kanjiRanges {
-                    if scalar.value >= UInt32(from) && scalar.value <= UInt32(to) {
-                        return true
-                    }
-                }
+        guard !isEmpty else { return false }
+        return withUTF8Buffer(self) { buffer in
+            allUTF8ScalarsSatisfy(in: buffer) { scalar in
+                kanjiRanges.contains { $0.contains(scalar) }
             }
-            return false
         }
     }
-    
+
+    var hasKanji: Bool {
+        return withUTF8Buffer(self) { buffer in
+            containsUTF8Scalar(in: buffer) { scalar in
+                kanjiRanges.contains { $0.contains(scalar) }
+            }
+        }
+    }
+
     var distinctKanji: Set<String> {
         var result = Set<String>()
-        var bytes = Array(utf8)
-        var i = 0
-        while i < bytes.count {
-            if i + 2 < bytes.count,
-               (bytes[i] & 0xF0) == 0xE0,
-               (bytes[i+1] & 0xC0) == 0x80,
-               (bytes[i+2] & 0xC0) == 0x80 {
-                let scalar = (UInt32(bytes[i] & 0x0F) << 12) |
-                (UInt32(bytes[i+1] & 0x3F) << 6) |
-                (UInt32(bytes[i+2] & 0x3F))
-                for (from, to) in kanjiRanges {
-                    if scalar >= from && scalar <= to {
-                        let char = String(decoding: bytes[i...i+2], as: UTF8.self)
-                        result.insert(char)
-                        break
-                    }
+        withUTF8Buffer(self) { buffer in
+            forEachUTF8Scalar(in: buffer) { scalar in
+                if kanjiRanges.contains(where: { $0.contains(scalar) }),
+                   let unicodeScalar = UnicodeScalar(scalar) {
+                    result.insert(String(unicodeScalar))
                 }
-                i += 3
-            } else {
-                i += 1
             }
         }
         return result
     }
-    
+
     var withHiraganaToKatakana: String {
-        var result = [UInt8]()
-        let bytes = Array(self.utf8)
-        var i = 0
-        while i < bytes.count {
-            if i + 2 < bytes.count,
-               bytes[i] == 0xE3,
-               (bytes[i+1] & 0xC0) == 0x80,
-               (bytes[i+2] & 0xC0) == 0x80 {
-                let scalar = (UInt32(bytes[i] & 0x0F) << 12) |
-                (UInt32(bytes[i+1] & 0x3F) << 6)  |
-                (UInt32(bytes[i+2] & 0x3F))
-                if scalar >= 0x3041 && scalar <= 0x3096 {
-                    let newScalar = scalar + 0x60
-                    let b0 = UInt8(0xE0 | (newScalar >> 12))
-                    let b1 = UInt8(0x80 | ((newScalar >> 6) & 0x3F))
-                    let b2 = UInt8(0x80 | (newScalar & 0x3F))
-                    result.append(contentsOf: [b0, b1, b2])
-                    i += 3
-                    continue
+        return withUTF8Buffer(self) { buffer in
+            var result = [UInt8]()
+            result.reserveCapacity(buffer.count)
+            var index = 0
+            let count = buffer.count
+
+            while index < count {
+                if let decoded = decodeUTF8Scalar(in: buffer, at: index) {
+                    if decoded.scalar >= UnicodeScalarConstants.hiraganaStart
+                        && decoded.scalar <= UnicodeScalarConstants.hiraganaEnd {
+                        let newScalar = decoded.scalar + UnicodeScalarConstants.kanaShift
+                        encodeUTF8Scalar(newScalar, into: &result)
+                    } else {
+                        for offset in 0..<decoded.length {
+                            result.append(buffer[index + offset])
+                        }
+                    }
+                    index += decoded.length
+                } else {
+                    result.append(buffer[index])
+                    index += 1
                 }
             }
-            result.append(bytes[i])
-            i += 1
+            return String(decoding: result, as: UTF8.self)
         }
-        return String(decoding: result, as: UTF8.self)
     }
-    
+
     var withKatakanaToHiragana: String {
-        var result = [UInt8]()
-        let bytes = Array(self.utf8)
-        var i = 0
-        while i < bytes.count {
-            if i + 2 < bytes.count,
-               bytes[i] == 0xE3,
-               (bytes[i+1] & 0xC0) == 0x80,
-               (bytes[i+2] & 0xC0) == 0x80 {
-                let scalar = (UInt32(bytes[i] & 0x0F) << 12) |
-                (UInt32(bytes[i+1] & 0x3F) << 6)  |
-                (UInt32(bytes[i+2] & 0x3F))
-                if scalar >= 0x30A1 && scalar <= 0x30F6 {
-                    let newScalar = scalar - 0x60
-                    let b0 = UInt8(0xE0 | (newScalar >> 12))
-                    let b1 = UInt8(0x80 | ((newScalar >> 6) & 0x3F))
-                    let b2 = UInt8(0x80 | (newScalar & 0x3F))
-                    result.append(contentsOf: [b0, b1, b2])
-                    i += 3
-                    continue
+        return withUTF8Buffer(self) { buffer in
+            var result = [UInt8]()
+            result.reserveCapacity(buffer.count)
+            var index = 0
+            let count = buffer.count
+
+            while index < count {
+                if let decoded = decodeUTF8Scalar(in: buffer, at: index) {
+                    if decoded.scalar >= UnicodeScalarConstants.katakanaStart
+                        && decoded.scalar <= UnicodeScalarConstants.katakanaToHiraganaEnd {
+                        let newScalar = decoded.scalar - UnicodeScalarConstants.kanaShift
+                        encodeUTF8Scalar(newScalar, into: &result)
+                    } else {
+                        for offset in 0..<decoded.length {
+                            result.append(buffer[index + offset])
+                        }
+                    }
+                    index += decoded.length
+                } else {
+                    result.append(buffer[index])
+                    index += 1
                 }
             }
-            result.append(bytes[i])
-            i += 1
+            return String(decoding: result, as: UTF8.self)
         }
-        return String(decoding: result, as: UTF8.self)
     }
-    
+
     var containsHalfWidthDigits: Bool {
         for byte in self.utf8 {
-            // ASCII '0' = 0x30, '9' = 0x39
-            if byte >= 0x30 && byte <= 0x39 {
+            if byte >= UTF8Constants.asciiZero && byte <= UTF8Constants.asciiNine {
                 return true
             }
         }
         return false
     }
-    
+
     var withHalfWidthDigitsToFullWidth: String {
-        let fullwidthDigits: [[UInt8]] = [
-            [0xEF, 0xBC, 0x90], // '0' -> '０'
-            [0xEF, 0xBC, 0x91], // '1' -> '１'
-            [0xEF, 0xBC, 0x92], // '2' -> '２'
-            [0xEF, 0xBC, 0x93], // '3' -> '３'
-            [0xEF, 0xBC, 0x94], // '4' -> '４'
-            [0xEF, 0xBC, 0x95], // '5' -> '５'
-            [0xEF, 0xBC, 0x96], // '6' -> '６'
-            [0xEF, 0xBC, 0x97], // '7' -> '７'
-            [0xEF, 0xBC, 0x98], // '8' -> '８'
-            [0xEF, 0xBC, 0x99]  // '9' -> '９'
-        ]
-        
         var resultBytes = [UInt8]()
         resultBytes.reserveCapacity(self.utf8.count)
-        
+
         for byte in self.utf8 {
-            // ASCII '0' to '9'
-            if byte >= 0x30 && byte <= 0x39 {
-                let index = Int(byte - 0x30)
-                resultBytes.append(contentsOf: fullwidthDigits[index])
+            if byte >= UTF8Constants.asciiZero && byte <= UTF8Constants.asciiNine {
+                let scalar = UnicodeScalarConstants.fullWidthDigitZero + UInt32(byte - UTF8Constants.asciiZero)
+                encodeUTF8Scalar(scalar, into: &resultBytes)
             } else {
-                // Non-digit byte - pass through
                 resultBytes.append(byte)
             }
         }
-        
+
         return String(decoding: resultBytes, as: UTF8.self)
     }
 }
