@@ -124,6 +124,18 @@ private let rendakuTransforms = [
     "ほ" : ["ぼ", "ぽ"]
 ]
 
+public extension String {
+    var isASCIIOrFullWidthDigitsOnly: Bool {
+        guard !isEmpty else { return false }
+        if let result = utf8.withContiguousStorageIfAvailable({ buffer in
+            isASCIIOrFullWidthDigitsOnlyUTF8Buffer(buffer)
+        }) {
+            return result
+        }
+        return isASCIIOrFullWidthDigitsOnlyUTF8Bytes(utf8)
+    }
+}
+
 /// Requires preceding character to be kana, kanji or numeric.
 public func rendakuVariations(wordKana: String, accumulatedOutputText: String) -> [String] {
     guard
