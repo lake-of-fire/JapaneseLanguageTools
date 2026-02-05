@@ -22,6 +22,7 @@ let package = Package(
             name: "JapaneseLanguageTools",
             dependencies: [
                 //.product(name: "RealmSwift", package: "RealmBinary"),
+                .product(name: "Realm", package: "realm-swift"),
                 .product(name: "RealmSwift", package: "realm-swift"),
                 .product(name: "Mute", package: "Mute"),
             ],

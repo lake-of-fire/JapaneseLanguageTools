@@ -41,6 +41,10 @@ private enum UTF8Constants {
     static let asciiMax: UInt8 = 0x7F
     static let asciiZero: UInt8 = 0x30
     static let asciiNine: UInt8 = 0x39
+    static let asciiUppercaseA: UInt8 = 0x41
+    static let asciiUppercaseZ: UInt8 = 0x5A
+    static let asciiLowercaseA: UInt8 = 0x61
+    static let asciiLowercaseZ: UInt8 = 0x7A
 
     static let twoByteLeadMax: UInt8 = 0xDF
     static let threeByteLeadMax: UInt8 = 0xEF
@@ -79,6 +83,19 @@ private func withUTF8Buffer<S: StringProtocol, R>(_ string: S, _ body: (UnsafeBu
 @inline(__always)
 private func isContinuationByte(_ byte: UInt8) -> Bool {
     (byte & UTF8Constants.continuationMask) == UTF8Constants.continuationExpected
+}
+
+@inline(__always)
+private func containsASCIILetterUTF8Buffer(_ buffer: UnsafeBufferPointer<UInt8>) -> Bool {
+    for byte in buffer {
+        if byte >= UTF8Constants.asciiUppercaseA && byte <= UTF8Constants.asciiUppercaseZ {
+            return true
+        }
+        if byte >= UTF8Constants.asciiLowercaseA && byte <= UTF8Constants.asciiLowercaseZ {
+            return true
+        }
+    }
+    return false
 }
 
 @inline(__always)
@@ -331,6 +348,12 @@ public extension StringProtocol {
             }
         }
         return result
+    }
+
+    var hasASCIILetters: Bool {
+        return withUTF8Buffer(self) { buffer in
+            containsASCIILetterUTF8Buffer(buffer)
+        }
     }
 
     var withHiraganaToKatakana: String {
