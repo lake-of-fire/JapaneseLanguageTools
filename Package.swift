@@ -13,33 +13,30 @@ let package = Package(
             targets: ["JapaneseLanguageTools"]),
     ],
     dependencies: [
-//        .package(url: "https://github.com/lake-of-fire/RealmBinary.git", branch: "main"),
-        .package(url: "https://github.com/realm/realm-swift.git", from: "20.0.3"),
         .package(url: "https://github.com/lake-of-fire/Mute.git", branch: "master"),
+        .package(url: "https://github.com/pointfreeco/sqlite-data.git", exact: "1.4.1"),
     ],
     targets: [
         .target(
             name: "JapaneseLanguageTools",
             dependencies: [
-                //.product(name: "RealmSwift", package: "RealmBinary"),
-                .product(name: "Realm", package: "realm-swift"),
-                .product(name: "RealmSwift", package: "realm-swift"),
                 .product(name: "Mute", package: "Mute"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             resources: [
-                .copy("Resources/tofugu-audio-index.realm"),
-            ]
+                .copy("Resources/tofugu-audio-index.sqlite"),
+            ],
+            linkerSettings: []
         ),
         .testTarget(
             name: "JapaneseLanguageToolsTests",
             dependencies: ["JapaneseLanguageTools"]
         ),
         .executableTarget(
-            name: "RealmCSVImporter",
-            dependencies: [
-                "JapaneseLanguageTools",
-//                .product(name: "RealmSwift", package: "RealmBinary"),
-                .product(name: "RealmSwift", package: "realm-swift"),
+            name: "TofuguAudioIndexSQLiteBuilder",
+            dependencies: [],
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
             ]
         )
     ]
