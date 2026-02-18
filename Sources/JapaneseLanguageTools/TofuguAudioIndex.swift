@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import SQLiteData
 
 @Table("tofugu_audio_index")
@@ -34,10 +35,16 @@ public enum TofuguAudioIndex {
         let valuesCSV: String?
         do {
             valuesCSV = try dbQueue.read { db in
-                try TofuguAudioIndexRow
-                    .find(term)
-                    .select(\.values_csv)
-                    .fetchOne(db) ?? nil
+                try String.fetchOne(
+                    db,
+                    sql: """
+                        SELECT "values_csv"
+                        FROM "tofugu_audio_index"
+                        WHERE "term" = ?
+                        LIMIT 1
+                        """,
+                    arguments: [term]
+                )
             }
         } catch {
             return nil
