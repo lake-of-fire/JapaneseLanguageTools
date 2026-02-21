@@ -221,12 +221,22 @@ private func encodeUTF8Scalar(_ scalar: UInt32, into output: inout [UInt8]) {
 
 @inline(__always)
 private func isKanaScalar(_ scalar: UInt32) -> Bool {
+    isJapaneseKanaScalar(scalar)
+}
+
+@inline(__always)
+public func isJapaneseKanaScalar(_ scalar: UInt32) -> Bool {
     if scalar >= UnicodeScalarConstants.hiraganaStart && scalar <= UnicodeScalarConstants.hiraganaEnd { return true }
     if scalar >= UnicodeScalarConstants.hiraganaIterationStart && scalar <= UnicodeScalarConstants.hiraganaIterationEnd { return true }
     if scalar >= UnicodeScalarConstants.katakanaStart && scalar <= UnicodeScalarConstants.katakanaEnd { return true }
     if scalar >= UnicodeScalarConstants.katakanaProlongedStart && scalar <= UnicodeScalarConstants.katakanaProlongedEnd { return true }
     if scalar >= UnicodeScalarConstants.halfWidthKatakanaStart && scalar <= UnicodeScalarConstants.halfWidthKatakanaEnd { return true }
     return false
+}
+
+@inline(__always)
+public func isJapaneseKanaScalar(_ scalar: UnicodeScalar) -> Bool {
+    isJapaneseKanaScalar(scalar.value)
 }
 
 @inline(__always)
@@ -299,6 +309,16 @@ fileprivate let kanjiRanges: [ClosedRange<UInt32>] = [
     UnicodeScalarConstants.kanjiCompatibilitySupplementStart...UnicodeScalarConstants.kanjiCompatibilitySupplementEnd
 ]
 
+@inline(__always)
+public func isJapaneseKanjiScalar(_ scalar: UInt32) -> Bool {
+    kanjiRanges.contains { $0.contains(scalar) }
+}
+
+@inline(__always)
+public func isJapaneseKanjiScalar(_ scalar: UnicodeScalar) -> Bool {
+    isJapaneseKanjiScalar(scalar.value)
+}
+
 public extension StringProtocol {
     var isKana: Bool {
         guard !isEmpty else { return false }
@@ -324,7 +344,7 @@ public extension StringProtocol {
         guard !isEmpty else { return false }
         return withUTF8Buffer(self) { buffer in
             allUTF8ScalarsSatisfy(in: buffer) { scalar in
-                kanjiRanges.contains { $0.contains(scalar) }
+                isJapaneseKanjiScalar(scalar)
             }
         }
     }
@@ -332,7 +352,7 @@ public extension StringProtocol {
     var hasKanji: Bool {
         return withUTF8Buffer(self) { buffer in
             containsUTF8Scalar(in: buffer) { scalar in
-                kanjiRanges.contains { $0.contains(scalar) }
+                isJapaneseKanjiScalar(scalar)
             }
         }
     }
@@ -341,7 +361,7 @@ public extension StringProtocol {
         var result = Set<String>()
         withUTF8Buffer(self) { buffer in
             forEachUTF8Scalar(in: buffer) { scalar in
-                if kanjiRanges.contains(where: { $0.contains(scalar) }),
+                if isJapaneseKanjiScalar(scalar),
                    let unicodeScalar = UnicodeScalar(scalar) {
                     result.insert(String(unicodeScalar))
                 }
