@@ -14,7 +14,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/lake-of-fire/Mute.git", branch: "master"),
-        .package(url: "https://github.com/pointfreeco/sqlite-data.git", exact: "1.4.1"),
+        .package(url: "https://github.com/pointfreeco/sqlite-data.git", exact: "1.6.0"),
     ],
     targets: [
         .target(
