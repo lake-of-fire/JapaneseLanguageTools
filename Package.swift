@@ -13,16 +13,14 @@ let package = Package(
             targets: ["JapaneseLanguageTools"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/lake-of-fire/RealmBinary.git", branch: "main"),
-//        .package(url: "https://github.com/realm/realm-swift.git", from: "10.54.4"),
+        .package(url: "https://github.com/realm/realm-swift.git", from: "20.0.4"),
         .package(url: "https://github.com/lake-of-fire/Mute.git", branch: "master"),
     ],
     targets: [
         .target(
             name: "JapaneseLanguageTools",
             dependencies: [
-                .product(name: "RealmSwift", package: "RealmBinary"),
-//                .product(name: "RealmSwift", package: "realm-swift"),
+                .product(name: "RealmSwift", package: "realm-swift"),
                 .product(name: "Mute", package: "Mute"),
             ],
             resources: [
@@ -33,8 +31,7 @@ let package = Package(
             name: "RealmCSVImporter",
             dependencies: [
                 "JapaneseLanguageTools",
-                .product(name: "RealmSwift", package: "RealmBinary"),
-//                .product(name: "RealmSwift", package: "realm-swift"),
+                .product(name: "RealmSwift", package: "realm-swift"),
             ]
         )
     ]
