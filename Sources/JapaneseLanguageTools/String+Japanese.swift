@@ -357,6 +357,18 @@ public extension StringProtocol {
         }
     }
 
+    var kanjiCount: Int {
+        var count = 0
+        withUTF8Buffer(self) { buffer in
+            forEachUTF8Scalar(in: buffer) { scalar in
+                if isJapaneseKanjiScalar(scalar) {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
     var distinctKanji: Set<String> {
         var result = Set<String>()
         withUTF8Buffer(self) { buffer in

@@ -97,6 +97,13 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertEqual("東京タワー is 高い".withKanaToRomaji, "東京tawaa is 高i")
         XCTAssertEqual("A😊カナ".withKanaToRomaji, "A😊kana")
     }
+
+    func testKanjiCount() {
+        XCTAssertEqual("物凄い".kanjiCount, 2)
+        XCTAssertEqual("食べる".kanjiCount, 1)
+        XCTAssertEqual("スピードスケート".kanjiCount, 0)
+        XCTAssertEqual("𠀋百円".kanjiCount, 3)
+    }
     
     func testTrailingSokuonEdgeCase() {
         XCTAssertEqual("あっ".withKanaToRomaji, "axtu")
