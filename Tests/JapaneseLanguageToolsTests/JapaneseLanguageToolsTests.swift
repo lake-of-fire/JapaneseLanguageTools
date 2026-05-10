@@ -104,6 +104,12 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertEqual("スピードスケート".kanjiCount, 0)
         XCTAssertEqual("𠀋百円".kanjiCount, 3)
     }
+
+    func testOrderedDistinctKanji() {
+        XCTAssertEqual("百円百".orderedDistinctKanji, ["百", "円"])
+        XCTAssertEqual("スピードスケート".orderedDistinctKanji, [])
+        XCTAssertEqual("𠀋百円𠀋".orderedDistinctKanji, ["𠀋", "百", "円"])
+    }
     
     func testTrailingSokuonEdgeCase() {
         XCTAssertEqual("あっ".withKanaToRomaji, "axtu")

@@ -382,6 +382,21 @@ public extension StringProtocol {
         return result
     }
 
+    var orderedDistinctKanji: [String] {
+        var result = [String]()
+        var seen = Set<UInt32>()
+        withUTF8Buffer(self) { buffer in
+            forEachUTF8Scalar(in: buffer) { scalar in
+                if isJapaneseKanjiScalar(scalar),
+                   seen.insert(scalar).inserted,
+                   let unicodeScalar = UnicodeScalar(scalar) {
+                    result.append(String(unicodeScalar))
+                }
+            }
+        }
+        return result
+    }
+
     var hasASCIILetters: Bool {
         return withUTF8Buffer(self) { buffer in
             containsASCIILetterUTF8Buffer(buffer)
