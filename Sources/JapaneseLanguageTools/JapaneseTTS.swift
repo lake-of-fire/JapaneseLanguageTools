@@ -1,9 +1,137 @@
 import SwiftUI
 #if os(iOS)
-import Mute
+import AudioToolbox
+import UIKit
 #endif
 import Speech
 import Combine
+
+#if os(iOS)
+@MainActor
+private final class SafeSilentSwitchDetector {
+    static let shared = SafeSilentSwitchDetector()
+
+    private(set) var isMute = false
+    private var isAvailable = false
+    private var isPlaying = false
+    private var isScheduled = false
+    private var isPaused = false
+    private var interval: TimeInterval = 0
+    private var soundID: SystemSoundID = 0
+    private let checkInterval: TimeInterval = 1.0
+
+    private init() {
+        guard let soundURL = Self.muteSoundURL() else {
+            isAvailable = false
+            return
+        }
+
+        var createdSoundID: SystemSoundID = 0
+        guard AudioServicesCreateSystemSoundID(soundURL as CFURL, &createdSoundID) == kAudioServicesNoError else {
+            isAvailable = false
+            return
+        }
+
+        soundID = createdSoundID
+        isAvailable = true
+
+        var yes: UInt32 = 1
+        AudioServicesSetProperty(
+            kAudioServicesPropertyIsUISound,
+            UInt32(MemoryLayout.size(ofValue: soundID)),
+            &soundID,
+            UInt32(MemoryLayout.size(ofValue: yes)),
+            &yes
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(didEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(willEnterForeground),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+
+        schedulePlaySound()
+    }
+
+    deinit {
+        if soundID != 0 {
+            AudioServicesDisposeSystemSoundID(soundID)
+        }
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    private static func muteSoundURL() -> URL? {
+        var candidates = [URL?]()
+
+        candidates.append(Bundle.main.url(forResource: "mute", withExtension: "aiff"))
+
+        let bundleNames = ["Mute", "Mute_Mute"]
+        let searchRoots: [URL?] = [
+            Bundle.main.resourceURL,
+            Bundle.main.privateFrameworksURL,
+            Bundle.main.bundleURL.appendingPathComponent("Frameworks"),
+            Bundle.main.bundleURL,
+        ]
+
+        for root in searchRoots {
+            candidates.append(root?.appendingPathComponent("Mute.framework/mute.aiff"))
+            for bundleName in bundleNames {
+                candidates.append(root?.appendingPathComponent("\(bundleName).bundle/mute.aiff"))
+                candidates.append(root?.appendingPathComponent("Mute.framework/\(bundleName).bundle/mute.aiff"))
+            }
+        }
+
+        return candidates.compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    @objc private func didEnterBackground() {
+        isPaused = true
+    }
+
+    @objc private func willEnterForeground() {
+        isPaused = false
+        if !isPlaying {
+            schedulePlaySound()
+        }
+    }
+
+    private func schedulePlaySound() {
+        guard isAvailable, !isScheduled else { return }
+        isScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + checkInterval) { [weak self] in
+            guard let self else { return }
+            self.isScheduled = false
+            guard !self.isPaused else { return }
+            self.playSound()
+        }
+    }
+
+    private func playSound() {
+        guard isAvailable, !isPaused, !isPlaying else { return }
+        interval = Date.timeIntervalSinceReferenceDate
+        isPlaying = true
+        AudioServicesPlaySystemSoundWithCompletion(soundID) { [weak self] in
+            Task { @MainActor in
+                self?.soundFinishedPlaying()
+            }
+        }
+    }
+
+    private func soundFinishedPlaying() {
+        isPlaying = false
+        let elapsed = Date.timeIntervalSinceReferenceDate - interval
+        isMute = elapsed < 0.1
+        schedulePlaySound()
+    }
+}
+#endif
 
 public class JapaneseTTS: NSObject, ObservableObject {
     public static let shared = JapaneseTTS()
@@ -37,8 +165,8 @@ public class JapaneseTTS: NSObject, ObservableObject {
     private static let speechSynth = AVSpeechSynthesizer()
     
     // For Instagram-like behavior.
-    static var wasDeviceMuteOverriddenByUnmutingTts = false
-    
+    private static var wasDeviceMuteOverriddenByUnmutingTts = false
+
     @MainActor
     private class func getTtsEnabled() -> Bool {
         if UserDefaults.standard.object(forKey: "ttsEnabled") == nil {
@@ -57,7 +185,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
 #if targetEnvironment(simulator)
         return false
 #elseif os(iOS)
-        return (!Mute.shared.isMute || wasDeviceMuteOverriddenByUnmutingTts) && getTtsEnabled() && !(ttsTemporarilyPaused ?? false)
+        return (!SafeSilentSwitchDetector.shared.isMute || wasDeviceMuteOverriddenByUnmutingTts) && getTtsEnabled() && !(ttsTemporarilyPaused ?? false)
 #else
         return getTtsEnabled() && !UserDefaults.standard.bool(forKey: "ttsTemporarilyPaused")
 #endif
@@ -97,9 +225,9 @@ public class JapaneseTTS: NSObject, ObservableObject {
     @MainActor
     public func toggleTts() async {
         let enabled = await refreshIsEnabled()
-        
+
 #if os(iOS)
-        if enabled && Mute.shared.isMute {
+        if enabled && SafeSilentSwitchDetector.shared.isMute {
             Self.wasDeviceMuteOverriddenByUnmutingTts = true
         }
 #endif
