@@ -125,4 +125,24 @@ final class JapaneseLanguageToolsTests: XCTestCase {
             XCTAssertEqual(roundTripped, r, "Round-trip failed for \(r)")
         }
     }
+
+    func testBeginnerHepburnRomajiUsesLearnerSpellings() {
+        XCTAssertEqual("しちつふじ".withKanaToBeginnerHepburnRomaji, "shichitsufuji")
+        XCTAssertEqual("しゃしゅしょ".withKanaToBeginnerHepburnRomaji, "shashusho")
+        XCTAssertEqual("じゃじゅじょ".withKanaToBeginnerHepburnRomaji, "jajujo")
+    }
+
+    func testBeginnerHepburnRomajiLongVowelsAndSokuon() {
+        XCTAssertEqual("がっこう".withKanaToBeginnerHepburnRomaji, "gakkou")
+        XCTAssertEqual("コーヒー".withKanaToBeginnerHepburnRomaji, "koohii")
+        XCTAssertEqual("こっち".withKanaToBeginnerHepburnRomaji, "kocchi")
+        XCTAssertEqual("まっちゃ".withKanaToBeginnerHepburnRomaji, "maccha")
+    }
+
+    func testBeginnerHepburnRomajiNBeforeVowelOrY() {
+        XCTAssertEqual("ほん".withKanaToBeginnerHepburnRomaji, "hon")
+        XCTAssertEqual("んあ".withKanaToBeginnerHepburnRomaji, "n'a")
+        XCTAssertEqual("んや".withKanaToBeginnerHepburnRomaji, "n'ya")
+        XCTAssertEqual("しんよう".withKanaToBeginnerHepburnRomaji, "shin'you")
+    }
 }
