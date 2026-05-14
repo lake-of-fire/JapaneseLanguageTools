@@ -140,6 +140,7 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertEqual("こっち".withKanaToBeginnerHepburnRomaji, "kocchi")
         XCTAssertEqual("まっちゃ".withKanaToBeginnerHepburnRomaji, "maccha")
         XCTAssertEqual("ひっしゃ".withKanaToBeginnerHepburnRomaji, "hissha")
+        XCTAssertEqual("ひっ".withKanaToBeginnerHepburnRomaji, "hit")
     }
 
     func testBeginnerHepburnRomajiNBeforeVowelOrY() {

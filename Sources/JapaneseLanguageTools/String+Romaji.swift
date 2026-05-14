@@ -565,8 +565,8 @@ public extension String {
             i = src.index(after: i)
         }
         
-        // Trailing sokuon with no following kana (rare) -> "xtu" for symmetry with forward mapping.
-        if pendingSokuon { out += "xtu" }
+        // Trailing sokuon with no following kana can happen in split ruby annotations.
+        if pendingSokuon { out += Self.trailingBeginnerHepburnSokuonFallback(after: out) }
         
         return out
     }
@@ -776,6 +776,18 @@ public extension String {
             return "xtu" + romaji
         } else {
             return String(c) + romaji
+        }
+    }
+
+    // Split ruby annotations can leave sokuon at the end of the local reading
+    // (e.g. 筆/者 as ひっ/しゃ). Avoid exposing IME-style `xtu` to beginners.
+    private static func trailingBeginnerHepburnSokuonFallback(after romaji: String) -> String {
+        guard let last = romaji.last else { return "" }
+        switch last {
+        case "a", "i", "u", "e", "o", "A", "I", "U", "E", "O":
+            return "t"
+        default:
+            return String(last)
         }
     }
     
