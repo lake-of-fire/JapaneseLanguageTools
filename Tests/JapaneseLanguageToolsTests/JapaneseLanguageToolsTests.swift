@@ -128,6 +128,8 @@ final class JapaneseLanguageToolsTests: XCTestCase {
 
     func testBeginnerHepburnRomajiUsesLearnerSpellings() {
         XCTAssertEqual("しちつふじ".withKanaToBeginnerHepburnRomaji, "shichitsufuji")
+        XCTAssertEqual("つ".withKanaToBeginnerHepburnRomaji, "tsu")
+        XCTAssertEqual("つく".withKanaToBeginnerHepburnRomaji, "tsuku")
         XCTAssertEqual("しゃしゅしょ".withKanaToBeginnerHepburnRomaji, "shashusho")
         XCTAssertEqual("じゃじゅじょ".withKanaToBeginnerHepburnRomaji, "jajujo")
     }
@@ -137,6 +139,7 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertEqual("コーヒー".withKanaToBeginnerHepburnRomaji, "koohii")
         XCTAssertEqual("こっち".withKanaToBeginnerHepburnRomaji, "kocchi")
         XCTAssertEqual("まっちゃ".withKanaToBeginnerHepburnRomaji, "maccha")
+        XCTAssertEqual("ひっしゃ".withKanaToBeginnerHepburnRomaji, "hissha")
     }
 
     func testBeginnerHepburnRomajiNBeforeVowelOrY() {

@@ -753,6 +753,7 @@ public extension String {
         var m = kanaToRomajiOne
         m["し"] = "shi"
         m["じ"] = "ji"
+        m["つ"] = "tsu"
         m["ぢ"] = "ji"
         m["づ"] = "zu"
         return m
