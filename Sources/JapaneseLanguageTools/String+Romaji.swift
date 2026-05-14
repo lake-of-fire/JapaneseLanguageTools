@@ -570,6 +570,86 @@ public extension String {
         
         return out
     }
+
+    /// Converts Hiragana **and** Katakana to beginner-facing Hepburn romaji.
+    /// - Notes:
+    ///   - Uses familiar learner spellings such as `shi`, `chi`, `tsu`, `fu`, and `ji`.
+    ///   - Does not use macrons: long vowels repeat the previous vowel (`がっこう` -> `gakkou`, `コーヒー` -> `koohii`).
+    ///   - Uses an apostrophe for `ん` before vowels and `y` (`んあ` -> `n'a`, `んや` -> `n'ya`).
+    var withKanaToBeginnerHepburnRomaji: String {
+        let src = Self.normalizeToHiragana(self)
+        var out = ""
+        var i = src.startIndex
+        var pendingSokuon = false
+
+        while i < src.endIndex {
+            let ch = src[i]
+
+            if ch == "ー" {
+                if let v = out.last(where: { "aeiouAEIOU".contains($0) }) {
+                    out.append(v)
+                }
+                i = src.index(after: i)
+                continue
+            }
+
+            if ch == "っ" {
+                pendingSokuon = true
+                i = src.index(after: i)
+                continue
+            }
+
+            if ch == "ん" {
+                if let first = Self.peekNextBeginnerHepburnRomajiFirst(hiragana: src, from: src.index(after: i)),
+                   "aiueoyAIUEOY".contains(first) {
+                    out += "n'"
+                } else {
+                    out += "n"
+                }
+                i = src.index(after: i)
+                continue
+            }
+
+            if let mapped = Self.kanaPunctToAscii[ch] {
+                out += mapped
+                i = src.index(after: i)
+                continue
+            }
+
+            var consumed = false
+            if let j = src.index(i, offsetBy: 1, limitedBy: src.endIndex), j < src.endIndex {
+                let two = String(src[i...j])
+                if var romaji = Self.kanaToBeginnerHepburnRomajiTwo[two] {
+                    if pendingSokuon {
+                        romaji = Self.applySokuon(to: romaji)
+                        pendingSokuon = false
+                    }
+                    out += romaji
+                    i = src.index(after: j)
+                    consumed = true
+                }
+            }
+            if consumed { continue }
+
+            let one = String(ch)
+            if var romaji = Self.kanaToBeginnerHepburnRomajiOne[one] {
+                if pendingSokuon {
+                    romaji = Self.applySokuon(to: romaji)
+                    pendingSokuon = false
+                }
+                out += romaji
+                i = src.index(after: i)
+                continue
+            }
+
+            out.append(ch)
+            i = src.index(after: i)
+        }
+
+        if pendingSokuon { out += "xtu" }
+
+        return out
+    }
     
     // MARK: - Kana -> Romaji tables (mirror forward mapping choices)
     
@@ -661,6 +741,23 @@ public extension String {
         "ぁ":"xa","ぃ":"xi","ぅ":"xu","ぇ":"xe","ぉ":"xo",
         "ゃ":"xya","ゅ":"xyu","ょ":"xyo","ゎ":"xwa"
     ]
+
+    private static let kanaToBeginnerHepburnRomajiTwo: [String: String] = {
+        var m = kanaToRomajiTwo
+        m["しゃ"] = "sha"; m["しゅ"] = "shu"; m["しょ"] = "sho"
+        m["じゃ"] = "ja"; m["じゅ"] = "ju"; m["じょ"] = "jo"
+        return m
+    }()
+
+    private static let kanaToBeginnerHepburnRomajiOne: [String: String] = {
+        var m = kanaToRomajiOne
+        m["し"] = "shi"
+        m["じ"] = "ji"
+        m["つ"] = "tsu"
+        m["ぢ"] = "ji"
+        m["づ"] = "zu"
+        return m
+    }()
     
     private static let kanaPunctToAscii: [Character: String] = [
         "。":".","、":",","！":"!","？":"?","：":":","；":";",
@@ -718,6 +815,17 @@ public extension String {
         }
         let one = String(hiragana[idx])
         if let r = kanaToRomajiOne[one], let f = r.first { return f }
+        return nil
+    }
+
+    private static func peekNextBeginnerHepburnRomajiFirst(hiragana: String, from idx: String.Index) -> Character? {
+        guard idx < hiragana.endIndex else { return nil }
+        if let j = hiragana.index(idx, offsetBy: 1, limitedBy: hiragana.endIndex), j < hiragana.endIndex {
+            let two = String(hiragana[idx...j])
+            if let r = kanaToBeginnerHepburnRomajiTwo[two], let f = r.first { return f }
+        }
+        let one = String(hiragana[idx])
+        if let r = kanaToBeginnerHepburnRomajiOne[one], let f = r.first { return f }
         return nil
     }
 }
