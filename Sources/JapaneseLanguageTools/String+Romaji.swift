@@ -565,8 +565,16 @@ public extension String {
             i = src.index(after: i)
         }
         
-        // Trailing sokuon with no following kana can happen in split ruby annotations.
-        if pendingSokuon { out += Self.trailingBeginnerHepburnSokuonFallback(after: out) }
+        // Trailing sokuon with no following kana (rare) -> "xtu" for symmetry with forward mapping.
+        if pendingSokuon { out += "xtu" }
+
+        if out.localizedCaseInsensitiveContains("hixtu") || out.localizedCaseInsensitiveContains("hitsha") {
+            debugPrint("# HIXTU", "legacy-output-contains-bad-sokuon", [
+                "input": self,
+                "normalized": src,
+                "output": out
+            ])
+        }
         
         return out
     }
@@ -646,7 +654,18 @@ public extension String {
             i = src.index(after: i)
         }
 
-        if pendingSokuon { out += "xtu" }
+        if pendingSokuon {
+            let fallback = Self.trailingBeginnerHepburnSokuonFallback(after: out)
+            out += fallback
+        }
+
+        if out.localizedCaseInsensitiveContains("hixtu") || out.localizedCaseInsensitiveContains("hitsha") {
+            debugPrint("# HIXTU", "output-contains-bad-sokuon", [
+                "input": self,
+                "normalized": src,
+                "output": out
+            ])
+        }
 
         return out
     }
@@ -790,7 +809,7 @@ public extension String {
             return String(last)
         }
     }
-    
+
     // Normalize: katakana -> hiragana (preserve 'ー'); leave others intact.
     private static func normalizeToHiragana(_ s: String) -> String {
         return withUTF8Buffer(s) { buffer in
