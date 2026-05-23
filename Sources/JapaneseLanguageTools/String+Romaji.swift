@@ -765,6 +765,7 @@ public extension String {
         var m = kanaToRomajiTwo
         m["しゃ"] = "sha"; m["しゅ"] = "shu"; m["しょ"] = "sho"
         m["じゃ"] = "ja"; m["じゅ"] = "ju"; m["じょ"] = "jo"
+        m["てぃ"] = "ti"; m["でぃ"] = "di"
         return m
     }()
 
