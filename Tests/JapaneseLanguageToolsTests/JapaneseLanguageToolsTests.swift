@@ -130,6 +130,7 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertEqual("しちつふじ".withKanaToBeginnerHepburnRomaji, "shichitsufuji")
         XCTAssertEqual("つ".withKanaToBeginnerHepburnRomaji, "tsu")
         XCTAssertEqual("つく".withKanaToBeginnerHepburnRomaji, "tsuku")
+        XCTAssertEqual("ティー".withKanaToBeginnerHepburnRomaji, "tii")
         XCTAssertEqual("しゃしゅしょ".withKanaToBeginnerHepburnRomaji, "shashusho")
         XCTAssertEqual("じゃじゅじょ".withKanaToBeginnerHepburnRomaji, "jajujo")
     }
