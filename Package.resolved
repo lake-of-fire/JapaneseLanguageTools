@@ -77,8 +77,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/swift-dependencies",
       "state" : {
-        "revision" : "c79f72b3e67a1eb64f66f76704c22ed6a5c1ed84",
-        "version" : "1.11.0"
+        "revision" : "f80552807ec92f72fe3fe4543d71879182b0bfd5",
+        "version" : "1.13.0"
       }
     },
     {
@@ -95,8 +95,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/swift-perception",
       "state" : {
-        "revision" : "4f47ebafed5f0b0172cf5c661454fa8e28fb2ac4",
-        "version" : "2.0.9"
+        "revision" : "25ac73741c3436605d61eceb5207e896973918e7",
+        "version" : "2.0.10"
       }
     },
     {
@@ -113,8 +113,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/swift-snapshot-testing",
       "state" : {
-        "revision" : "bf8d8c27f0f0c6d5e77bff0db76ab68f2050d15d",
-        "version" : "1.18.9"
+        "revision" : "ad5e3190cc63dc288f28546f9c6827efc1e9d495",
+        "version" : "1.19.2"
       }
     },
     {
@@ -122,8 +122,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/swift-structured-queries",
       "state" : {
-        "revision" : "20db4a2a446f51e67e1207d54a23ad0a03471a7b",
-        "version" : "0.31.0"
+        "revision" : "8da8818fccd9959bd683934ddc62cf45bb65b3c8",
+        "version" : "0.31.1"
       }
     },
     {
@@ -131,8 +131,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-syntax",
       "state" : {
-        "revision" : "4799286537280063c85a32f09884cfbca301b1a1",
-        "version" : "602.0.0"
+        "revision" : "9de99a78f099e59caf2b2beec65a4c45d54b2081",
+        "version" : "603.0.1"
       }
     },
     {
