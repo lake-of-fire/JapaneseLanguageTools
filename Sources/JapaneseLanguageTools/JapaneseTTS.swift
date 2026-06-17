@@ -163,6 +163,9 @@ public class JapaneseTTS: NSObject, ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     
     private static let speechSynth = AVSpeechSynthesizer()
+#if os(iOS)
+    private static let pronunciationAudioSessionOptions: AVAudioSession.CategoryOptions = [.mixWithOthers]
+#endif
     
     // For Instagram-like behavior.
     private static var wasDeviceMuteOverriddenByUnmutingTts = false
@@ -258,8 +261,9 @@ public class JapaneseTTS: NSObject, ObservableObject {
     private static func configAudioSession() {
 #if os(iOS)
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: .interruptSpokenAudioAndMixWithOthers)
-            try AVAudioSession.sharedInstance().setActive(true)
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .spokenAudio, options: pronunciationAudioSessionOptions)
+            try session.setActive(true)
         } catch { }
 #endif
     }
@@ -377,12 +381,14 @@ extension JapaneseTTS {
     private func refreshAudioSession(isPlaying: Bool) {
 #if os(iOS)
         do {
+            let session = AVAudioSession.sharedInstance()
             if isPlaying {
-                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: .interruptSpokenAudioAndMixWithOthers)
+                try session.setCategory(.playback, mode: .spokenAudio, options: JapaneseTTS.pronunciationAudioSessionOptions)
+                try session.setActive(true)
             } else {
-                try AVAudioSession.sharedInstance().setCategory(.ambient, mode: .spokenAudio, options: .interruptSpokenAudioAndMixWithOthers)
+                try session.setCategory(.ambient, mode: .spokenAudio, options: JapaneseTTS.pronunciationAudioSessionOptions)
+                try session.setActive(false, options: [.notifyOthersOnDeactivation])
             }
-            try AVAudioSession.sharedInstance().setActive(isPlaying)
         } catch { }
 #endif
     }
