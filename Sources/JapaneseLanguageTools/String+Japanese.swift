@@ -13,9 +13,17 @@ private enum UnicodeScalarConstants {
     static let katakanaToHiraganaEnd: UInt32 = 0x30F6
     static let katakanaProlongedStart: UInt32 = 0x30FC
     static let katakanaProlongedEnd: UInt32 = 0x30FF
+    static let katakanaPhoneticExtensionsStart: UInt32 = 0x31F0
+    static let katakanaPhoneticExtensionsEnd: UInt32 = 0x31FF
 
     static let halfWidthKatakanaStart: UInt32 = 0xFF66
     static let halfWidthKatakanaEnd: UInt32 = 0xFF9D
+
+    static let hiraganaIterationMark: UInt32 = 0x309D
+    static let voicedHiraganaIterationMark: UInt32 = 0x309E
+    static let katakanaIterationMark: UInt32 = 0x30FD
+    static let voicedKatakanaIterationMark: UInt32 = 0x30FE
+    static let combiningVoicedSoundMark: UInt32 = 0x3099
 
     static let kanaShift: UInt32 = 0x60
 
@@ -61,6 +69,26 @@ private enum UTF8Constants {
     static let twoByteLeadBase: UInt8 = 0xC0
     static let threeByteLeadBase: UInt8 = 0xE0
     static let fourByteLeadBase: UInt8 = 0xF0
+
+    static let kanjiThreeByteLeadMin: UInt8 = 0xE3
+    static let kanjiThreeByteLeadMax: UInt8 = 0xEF
+    static let kanjiExtensionAFirstLead: UInt8 = 0xE3
+    static let kanjiExtensionAFirstContinuationMin: UInt8 = 0x90
+    static let kanjiCommonLeadMin: UInt8 = 0xE4
+    static let kanjiCommonLeadMax: UInt8 = 0xE9
+    static let kanjiCompatibilityLead: UInt8 = 0xEF
+    static let kanjiCompatibilityContinuationMin: UInt8 = 0xA4
+    static let kanjiCompatibilityContinuationMax: UInt8 = 0xAB
+    static let kanjiFourByteLead: UInt8 = 0xF0
+    static let kanjiExtensionBContinuationMin: UInt8 = 0xA0
+    static let kanjiExtensionBContinuationMax: UInt8 = 0xA9
+    static let kanjiExtensionBLastContinuation: UInt8 = 0xAA
+    static let kanjiExtensionBLastThirdByteMax: UInt8 = 0x9B
+    static let kanjiCompatibilitySupplementContinuation: UInt8 = 0xAF
+    static let kanjiCompatibilitySupplementThirdByteMin: UInt8 = 0xA0
+    static let kanjiCompatibilitySupplementThirdByteMax: UInt8 = 0xA8
+
+    static let byteMask: UInt32 = 0xFF
 }
 
 private extension UInt32 {
@@ -230,6 +258,7 @@ public func isJapaneseKanaScalar(_ scalar: UInt32) -> Bool {
     if scalar >= UnicodeScalarConstants.hiraganaIterationStart && scalar <= UnicodeScalarConstants.hiraganaIterationEnd { return true }
     if scalar >= UnicodeScalarConstants.katakanaStart && scalar <= UnicodeScalarConstants.katakanaEnd { return true }
     if scalar >= UnicodeScalarConstants.katakanaProlongedStart && scalar <= UnicodeScalarConstants.katakanaProlongedEnd { return true }
+    if scalar >= UnicodeScalarConstants.katakanaPhoneticExtensionsStart && scalar <= UnicodeScalarConstants.katakanaPhoneticExtensionsEnd { return true }
     if scalar >= UnicodeScalarConstants.halfWidthKatakanaStart && scalar <= UnicodeScalarConstants.halfWidthKatakanaEnd { return true }
     return false
 }
@@ -237,6 +266,15 @@ public func isJapaneseKanaScalar(_ scalar: UInt32) -> Bool {
 @inline(__always)
 public func isJapaneseKanaScalar(_ scalar: UnicodeScalar) -> Bool {
     isJapaneseKanaScalar(scalar.value)
+}
+
+@inline(__always)
+public func isJapaneseKanaCharacterFast(_ character: Character) -> Bool {
+    let stringValue = String(character)
+    return withUTF8Buffer(stringValue) { buffer in
+        guard !buffer.isEmpty else { return false }
+        return allUTF8ScalarsSatisfy(in: buffer) { isJapaneseKanaScalar($0) }
+    }
 }
 
 @inline(__always)
@@ -310,8 +348,102 @@ fileprivate let kanjiRanges: [ClosedRange<UInt32>] = [
 ]
 
 @inline(__always)
-public func isJapaneseKanjiScalar(_ scalar: UInt32) -> Bool {
+private func isJapaneseKanjiScalarValue(_ scalar: UInt32) -> Bool {
     kanjiRanges.contains { $0.contains(scalar) }
+}
+
+@inline(__always)
+private func mayContainKanjiUTF8(_ buffer: UnsafeBufferPointer<UInt8>) -> Bool {
+    for byte in buffer {
+        if (byte >= UTF8Constants.kanjiThreeByteLeadMin && byte <= UTF8Constants.kanjiCommonLeadMax)
+            || byte == UTF8Constants.kanjiCompatibilityLead
+            || byte == UTF8Constants.kanjiFourByteLead {
+            return true
+        }
+    }
+    return false
+}
+
+private struct UTF8KanjiBytes: Hashable {
+    let packedBytes: UInt32
+    let length: Int
+}
+
+@inline(__always)
+private func packedUTF8Bytes(_ b0: UInt8, _ b1: UInt8, _ b2: UInt8) -> UInt32 {
+    (UInt32(b0) << 16) | (UInt32(b1) << 8) | UInt32(b2)
+}
+
+@inline(__always)
+private func packedUTF8Bytes(_ b0: UInt8, _ b1: UInt8, _ b2: UInt8, _ b3: UInt8) -> UInt32 {
+    (UInt32(b0) << 24) | (UInt32(b1) << 16) | (UInt32(b2) << 8) | UInt32(b3)
+}
+
+@inline(__always)
+private func kanjiBytes(in buffer: UnsafeBufferPointer<UInt8>, at index: Int) -> UTF8KanjiBytes? {
+    let count = buffer.count
+    let byte0 = buffer[index]
+
+    if byte0 >= UTF8Constants.kanjiThreeByteLeadMin && byte0 <= UTF8Constants.kanjiThreeByteLeadMax {
+        guard index + 2 < count else { return nil }
+        let byte1 = buffer[index + 1]
+        let byte2 = buffer[index + 2]
+        guard isContinuationByte(byte1), isContinuationByte(byte2) else { return nil }
+
+        // 3400-4DFF, 4E00-9FFF, F900-FAFF.
+        if (byte0 == UTF8Constants.kanjiExtensionAFirstLead
+                && byte1 >= UTF8Constants.kanjiExtensionAFirstContinuationMin)
+            || (byte0 >= UTF8Constants.kanjiCommonLeadMin && byte0 <= UTF8Constants.kanjiCommonLeadMax)
+            || (byte0 == UTF8Constants.kanjiCompatibilityLead
+                && byte1 >= UTF8Constants.kanjiCompatibilityContinuationMin
+                && byte1 <= UTF8Constants.kanjiCompatibilityContinuationMax) {
+            return UTF8KanjiBytes(packedBytes: packedUTF8Bytes(byte0, byte1, byte2), length: 3)
+        }
+        return nil
+    }
+
+    if byte0 == UTF8Constants.kanjiFourByteLead {
+        guard index + 3 < count else { return nil }
+        let byte1 = buffer[index + 1]
+        let byte2 = buffer[index + 2]
+        let byte3 = buffer[index + 3]
+        guard isContinuationByte(byte1), isContinuationByte(byte2), isContinuationByte(byte3) else { return nil }
+
+        // 20000-2A6DF and 2F800-2FA1F.
+        if (byte1 >= UTF8Constants.kanjiExtensionBContinuationMin
+                && byte1 <= UTF8Constants.kanjiExtensionBContinuationMax)
+            || (byte1 == UTF8Constants.kanjiExtensionBLastContinuation
+                && byte2 <= UTF8Constants.kanjiExtensionBLastThirdByteMax)
+            || (byte1 == UTF8Constants.kanjiCompatibilitySupplementContinuation
+                && byte2 >= UTF8Constants.kanjiCompatibilitySupplementThirdByteMin
+                && byte2 <= UTF8Constants.kanjiCompatibilitySupplementThirdByteMax) {
+            return UTF8KanjiBytes(packedBytes: packedUTF8Bytes(byte0, byte1, byte2, byte3), length: 4)
+        }
+    }
+
+    return nil
+}
+
+@inline(__always)
+private func string(fromKanjiBytes bytes: UTF8KanjiBytes) -> String {
+    if bytes.length == 3 {
+        return String(decoding: [
+            UInt8((bytes.packedBytes >> 16) & UTF8Constants.byteMask),
+            UInt8((bytes.packedBytes >> 8) & UTF8Constants.byteMask),
+            UInt8(bytes.packedBytes & UTF8Constants.byteMask)
+        ], as: UTF8.self)
+    }
+    return String(decoding: [
+        UInt8((bytes.packedBytes >> 24) & UTF8Constants.byteMask),
+        UInt8((bytes.packedBytes >> 16) & UTF8Constants.byteMask),
+        UInt8((bytes.packedBytes >> 8) & UTF8Constants.byteMask),
+        UInt8(bytes.packedBytes & UTF8Constants.byteMask)
+    ], as: UTF8.self)
+}
+
+@inline(__always)
+public func isJapaneseKanjiScalar(_ scalar: UInt32) -> Bool {
+    isJapaneseKanjiScalarValue(scalar)
 }
 
 @inline(__always)
@@ -337,6 +469,54 @@ public extension StringProtocol {
     var hasKana: Bool {
         return withUTF8Buffer(self) { buffer in
             containsUTF8Scalar(in: buffer) { isKanaScalar($0) }
+        }
+    }
+
+    func expandingJapaneseKanaIterationMarks() -> String? {
+        withUTF8Buffer(self) { buffer in
+            var result = [UInt8]()
+            result.reserveCapacity(buffer.count)
+            var previousKanaScalar: UInt32?
+            var changed = false
+            var index = 0
+            let count = buffer.count
+
+            while index < count {
+                guard let decoded = decodeUTF8Scalar(in: buffer, at: index) else {
+                    result.append(buffer[index])
+                    previousKanaScalar = nil
+                    index += 1
+                    continue
+                }
+
+                switch decoded.scalar {
+                case UnicodeScalarConstants.hiraganaIterationMark,
+                     UnicodeScalarConstants.katakanaIterationMark:
+                    guard let previousKanaScalar else { return nil }
+                    encodeUTF8Scalar(previousKanaScalar, into: &result)
+                    changed = true
+                case UnicodeScalarConstants.voicedHiraganaIterationMark,
+                     UnicodeScalarConstants.voicedKatakanaIterationMark:
+                    guard let previousKanaScalar else { return nil }
+                    let voiced = String(decoding: {
+                        var bytes = [UInt8]()
+                        bytes.reserveCapacity(6)
+                        encodeUTF8Scalar(previousKanaScalar, into: &bytes)
+                        encodeUTF8Scalar(UnicodeScalarConstants.combiningVoicedSoundMark, into: &bytes)
+                        return bytes
+                    }(), as: UTF8.self).precomposedStringWithCanonicalMapping
+                    result.append(contentsOf: voiced.utf8)
+                    changed = true
+                default:
+                    for offset in 0..<decoded.length {
+                        result.append(buffer[index + offset])
+                    }
+                    previousKanaScalar = isJapaneseKanaScalar(decoded.scalar) ? decoded.scalar : nil
+                }
+                index += decoded.length
+            }
+
+            return changed ? String(decoding: result, as: UTF8.self) : nil
         }
     }
 
@@ -370,27 +550,41 @@ public extension StringProtocol {
     }
 
     var distinctKanji: Set<String> {
-        var result = Set<String>()
+        var seen = Set<UTF8KanjiBytes>()
         withUTF8Buffer(self) { buffer in
-            forEachUTF8Scalar(in: buffer) { scalar in
-                if isJapaneseKanjiScalar(scalar),
-                   let unicodeScalar = UnicodeScalar(scalar) {
-                    result.insert(String(unicodeScalar))
+            guard mayContainKanjiUTF8(buffer) else { return }
+            var index = 0
+            while index < buffer.count {
+                if let kanjiBytes = kanjiBytes(in: buffer, at: index) {
+                    seen.insert(kanjiBytes)
+                    index += kanjiBytes.length
+                } else {
+                    index += 1
                 }
             }
+        }
+        var result = Set<String>()
+        result.reserveCapacity(seen.count)
+        for bytes in seen {
+            result.insert(string(fromKanjiBytes: bytes))
         }
         return result
     }
 
     var orderedDistinctKanji: [String] {
         var result = [String]()
-        var seen = Set<UInt32>()
+        var seen = Set<UTF8KanjiBytes>()
         withUTF8Buffer(self) { buffer in
-            forEachUTF8Scalar(in: buffer) { scalar in
-                if isJapaneseKanjiScalar(scalar),
-                   seen.insert(scalar).inserted,
-                   let unicodeScalar = UnicodeScalar(scalar) {
-                    result.append(String(unicodeScalar))
+            guard mayContainKanjiUTF8(buffer) else { return }
+            var index = 0
+            while index < buffer.count {
+                if let kanjiBytes = kanjiBytes(in: buffer, at: index) {
+                    if seen.insert(kanjiBytes).inserted {
+                        result.append(string(fromKanjiBytes: kanjiBytes))
+                    }
+                    index += kanjiBytes.length
+                } else {
+                    index += 1
                 }
             }
         }
