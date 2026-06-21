@@ -472,6 +472,12 @@ public extension StringProtocol {
         }
     }
 
+    var hasKatakana: Bool {
+        return withUTF8Buffer(self) { buffer in
+            containsUTF8Scalar(in: buffer) { isKatakanaScalar($0) }
+        }
+    }
+
     func expandingJapaneseKanaIterationMarks() -> String? {
         withUTF8Buffer(self) { buffer in
             var result = [UInt8]()
