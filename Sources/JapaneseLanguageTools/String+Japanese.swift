@@ -19,11 +19,12 @@ private enum UnicodeScalarConstants {
     static let halfWidthKatakanaStart: UInt32 = 0xFF66
     static let halfWidthKatakanaEnd: UInt32 = 0xFF9D
 
-    static let hiraganaIterationMark: UInt32 = 0x309D
-    static let voicedHiraganaIterationMark: UInt32 = 0x309E
-    static let katakanaIterationMark: UInt32 = 0x30FD
-    static let voicedKatakanaIterationMark: UInt32 = 0x30FE
-    static let combiningVoicedSoundMark: UInt32 = 0x3099
+    static let hiraganaIterationMark: UInt32 = 0x309D // ゝ
+    static let voicedHiraganaIterationMark: UInt32 = 0x309E // ゞ
+    static let katakanaIterationMark: UInt32 = 0x30FD // ヽ
+    static let voicedKatakanaIterationMark: UInt32 = 0x30FE // ヾ
+    static let combiningVoicedSoundMark: UInt32 = 0x3099 // Combining dakuten: ゙
+    static let combiningSemiVoicedSoundMark: UInt32 = 0x309A // Combining handakuten: ゚
 
     static let kanaShift: UInt32 = 0x60
 
@@ -480,17 +481,24 @@ public extension StringProtocol {
 
     func expandingJapaneseKanaIterationMarks() -> String? {
         withUTF8Buffer(self) { buffer in
+            let containsIterationMark = containsUTF8Scalar(in: buffer) { scalar in
+                scalar == UnicodeScalarConstants.hiraganaIterationMark
+                    || scalar == UnicodeScalarConstants.voicedHiraganaIterationMark
+                    || scalar == UnicodeScalarConstants.katakanaIterationMark
+                    || scalar == UnicodeScalarConstants.voicedKatakanaIterationMark
+            }
+            guard containsIterationMark else { return nil }
+
             var result = [UInt8]()
             result.reserveCapacity(buffer.count)
-            var previousKanaScalar: UInt32?
-            var changed = false
+            var previousKanaRange: Range<Int>?
             var index = 0
             let count = buffer.count
 
             while index < count {
                 guard let decoded = decodeUTF8Scalar(in: buffer, at: index) else {
                     result.append(buffer[index])
-                    previousKanaScalar = nil
+                    previousKanaRange = nil
                     index += 1
                     continue
                 }
@@ -498,31 +506,40 @@ public extension StringProtocol {
                 switch decoded.scalar {
                 case UnicodeScalarConstants.hiraganaIterationMark,
                      UnicodeScalarConstants.katakanaIterationMark:
-                    guard let previousKanaScalar else { return nil }
-                    encodeUTF8Scalar(previousKanaScalar, into: &result)
-                    changed = true
+                    guard let previousKanaRange else { return nil }
+                    result.append(contentsOf: buffer[previousKanaRange])
                 case UnicodeScalarConstants.voicedHiraganaIterationMark,
                      UnicodeScalarConstants.voicedKatakanaIterationMark:
-                    guard let previousKanaScalar else { return nil }
-                    let voiced = String(decoding: {
-                        var bytes = [UInt8]()
-                        bytes.reserveCapacity(6)
-                        encodeUTF8Scalar(previousKanaScalar, into: &bytes)
-                        encodeUTF8Scalar(UnicodeScalarConstants.combiningVoicedSoundMark, into: &bytes)
-                        return bytes
-                    }(), as: UTF8.self).precomposedStringWithCanonicalMapping
-                    result.append(contentsOf: voiced.utf8)
-                    changed = true
+                    guard let previousKanaRange else { return nil }
+                    if let previousScalar = decodeUTF8Scalar(in: buffer, at: previousKanaRange.lowerBound),
+                       previousKanaRange.lowerBound + previousScalar.length == previousKanaRange.upperBound {
+                        var voicedBytes = [UInt8]()
+                        voicedBytes.reserveCapacity(previousScalar.length + 3)
+                        encodeUTF8Scalar(previousScalar.scalar, into: &voicedBytes)
+                        encodeUTF8Scalar(UnicodeScalarConstants.combiningVoicedSoundMark, into: &voicedBytes)
+                        let voiced = String(decoding: voicedBytes, as: UTF8.self).precomposedStringWithCanonicalMapping
+                        result.append(contentsOf: voiced.utf8)
+                    } else {
+                        result.append(contentsOf: buffer[previousKanaRange])
+                    }
                 default:
                     for offset in 0..<decoded.length {
                         result.append(buffer[index + offset])
                     }
-                    previousKanaScalar = isJapaneseKanaScalar(decoded.scalar) ? decoded.scalar : nil
+                    let decodedEnd = index + decoded.length
+                    if decoded.scalar == UnicodeScalarConstants.combiningVoicedSoundMark
+                        || decoded.scalar == UnicodeScalarConstants.combiningSemiVoicedSoundMark {
+                        if let existingRange = previousKanaRange {
+                            previousKanaRange = existingRange.lowerBound..<decodedEnd
+                        }
+                    } else {
+                        previousKanaRange = isJapaneseKanaScalar(decoded.scalar) ? index..<decodedEnd : nil
+                    }
                 }
                 index += decoded.length
             }
 
-            return changed ? String(decoding: result, as: UTF8.self) : nil
+            return String(decoding: result, as: UTF8.self)
         }
     }
 
@@ -605,6 +622,12 @@ public extension StringProtocol {
 
     var withHiraganaToKatakana: String {
         return withUTF8Buffer(self) { buffer in
+            let containsConvertibleHiragana = containsUTF8Scalar(in: buffer) { scalar in
+                scalar >= UnicodeScalarConstants.hiraganaStart
+                    && scalar <= UnicodeScalarConstants.hiraganaEnd
+            }
+            guard containsConvertibleHiragana else { return String(self) }
+
             var result = [UInt8]()
             result.reserveCapacity(buffer.count)
             var index = 0
@@ -633,6 +656,12 @@ public extension StringProtocol {
 
     var withKatakanaToHiragana: String {
         return withUTF8Buffer(self) { buffer in
+            let containsConvertibleKatakana = containsUTF8Scalar(in: buffer) { scalar in
+                scalar >= UnicodeScalarConstants.katakanaStart
+                    && scalar <= UnicodeScalarConstants.katakanaToHiraganaEnd
+            }
+            guard containsConvertibleKatakana else { return String(self) }
+
             var result = [UInt8]()
             result.reserveCapacity(buffer.count)
             var index = 0
