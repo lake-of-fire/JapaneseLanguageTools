@@ -688,6 +688,67 @@ public extension StringProtocol {
         }
     }
 
+    func expandingJapaneseKanaIterationMarks() -> String? {
+        withUTF8Buffer(self) { buffer in
+            let containsIterationMark = containsUTF8Scalar(in: buffer) { scalar in
+                scalar == UnicodeScalarConstants.hiraganaIterationMark
+                    || scalar == UnicodeScalarConstants.voicedHiraganaIterationMark
+                    || scalar == UnicodeScalarConstants.katakanaIterationMark
+                    || scalar == UnicodeScalarConstants.voicedKatakanaIterationMark
+            }
+            guard containsIterationMark else { return nil }
+
+            var result = [UInt8]()
+            result.reserveCapacity(buffer.count)
+            var previousKanaRange: Range<Int>?
+            var index = 0
+
+            while index < buffer.count {
+                guard let decoded = decodeUTF8Scalar(in: buffer, at: index) else {
+                    result.append(buffer[index])
+                    previousKanaRange = nil
+                    index += 1
+                    continue
+                }
+
+                switch decoded.scalar {
+                case UnicodeScalarConstants.hiraganaIterationMark,
+                     UnicodeScalarConstants.katakanaIterationMark:
+                    guard let previousKanaRange else { return nil }
+                    result.append(contentsOf: buffer[previousKanaRange])
+                case UnicodeScalarConstants.voicedHiraganaIterationMark,
+                     UnicodeScalarConstants.voicedKatakanaIterationMark:
+                    guard let previousKanaRange else { return nil }
+                    if let previousScalar = decodeUTF8Scalar(in: buffer, at: previousKanaRange.lowerBound),
+                       previousKanaRange.lowerBound + previousScalar.length == previousKanaRange.upperBound {
+                        var voicedBytes = [UInt8]()
+                        voicedBytes.reserveCapacity(previousScalar.length + 3)
+                        encodeUTF8Scalar(previousScalar.scalar, into: &voicedBytes)
+                        encodeUTF8Scalar(UnicodeScalarConstants.combiningVoicedSoundMark, into: &voicedBytes)
+                        let voiced = String(decoding: voicedBytes, as: UTF8.self).precomposedStringWithCanonicalMapping
+                        result.append(contentsOf: voiced.utf8)
+                    } else {
+                        result.append(contentsOf: buffer[previousKanaRange])
+                    }
+                default:
+                    result.append(contentsOf: buffer[index..<(index + decoded.length)])
+                    let decodedEnd = index + decoded.length
+                    if decoded.scalar == UnicodeScalarConstants.combiningVoicedSoundMark
+                        || decoded.scalar == UnicodeScalarConstants.combiningSemiVoicedSoundMark {
+                        if let existingRange = previousKanaRange {
+                            previousKanaRange = existingRange.lowerBound..<decodedEnd
+                        }
+                    } else {
+                        previousKanaRange = isJapaneseKanaScalar(decoded.scalar) ? index..<decodedEnd : nil
+                    }
+                }
+                index += decoded.length
+            }
+
+            return String(decoding: result, as: UTF8.self)
+        }
+    }
+
     var containsHalfWidthDigits: Bool {
         for byte in self.utf8 {
             if byte >= UTF8Constants.asciiZero && byte <= UTF8Constants.asciiNine {

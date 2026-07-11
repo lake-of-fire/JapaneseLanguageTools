@@ -2,6 +2,24 @@ import XCTest
 @testable import JapaneseLanguageTools
 
 final class JapaneseLanguageToolsTests: XCTestCase {
+    func testKanaScriptConversionPreservesNoOpInputAndConvertsMatchingScript() {
+        XCTAssertEqual("かな漢字".withKatakanaToHiragana, "かな漢字")
+        XCTAssertEqual("カナ漢字".withKatakanaToHiragana, "かな漢字")
+        XCTAssertEqual("カナ漢字".withHiraganaToKatakana, "カナ漢字")
+        XCTAssertEqual("かな漢字".withHiraganaToKatakana, "カナ漢字")
+    }
+
+    func testKanaIterationMarkExpansion() {
+        XCTAssertNil("普通の言葉".expandingJapaneseKanaIterationMarks())
+        XCTAssertEqual("すゝめ".expandingJapaneseKanaIterationMarks(), "すすめ")
+        XCTAssertEqual("いすゞ".expandingJapaneseKanaIterationMarks(), "いすず")
+        XCTAssertEqual("クヽ".expandingJapaneseKanaIterationMarks(), "クク")
+        XCTAssertEqual("スヾ".expandingJapaneseKanaIterationMarks(), "スズ")
+        let decomposedZu = "す\u{3099}"
+        XCTAssertEqual((decomposedZu + "ゝ").expandingJapaneseKanaIterationMarks(), decomposedZu + decomposedZu)
+        XCTAssertEqual((decomposedZu + "ゞ").expandingJapaneseKanaIterationMarks(), decomposedZu + decomposedZu)
+    }
+
     
     // MARK: - withKanaToRomaji Tests
     
