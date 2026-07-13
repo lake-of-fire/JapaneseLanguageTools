@@ -4,7 +4,30 @@ import AudioToolbox
 import UIKit
 #endif
 import Speech
+import AVFoundation
 import Combine
+
+@MainActor
+public enum ManabiSpokenAudioSession {
+    private static var activeOwner: String?
+
+    public static func activate(owner: String) throws {
+#if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio, options: .interruptSpokenAudioAndMixWithOthers)
+        try session.setActive(true)
+#endif
+        activeOwner = owner
+    }
+
+    public static func deactivate(owner: String) throws {
+        guard activeOwner == owner else { return }
+#if os(iOS)
+        try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+#endif
+        activeOwner = nil
+    }
+}
 
 #if os(iOS)
 @MainActor
