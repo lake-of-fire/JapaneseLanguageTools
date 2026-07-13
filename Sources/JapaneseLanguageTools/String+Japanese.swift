@@ -90,10 +90,12 @@ private enum UTF8Constants {
     static let kanjiCompatibilitySupplementThirdByteMax: UInt8 = 0xA8
 
     static let byteMask: UInt32 = 0xFF
-}
 
-private extension UInt32 {
-    var hexa: String { .init(self, radix: 16, uppercase: true) }
+    static let reverseSolidus: UInt8 = 0x5C
+    static let uppercaseU: UInt8 = 0x55
+    static let hexNibbleMask: UInt32 = 0xF
+    static let hexDigitRadix: UInt8 = 10
+    static let bitsPerHexDigit = 4
 }
 
 @inline(__always)
@@ -103,7 +105,7 @@ private func withUTF8Buffer<S: StringProtocol, R>(_ string: S, _ body: (UnsafeBu
     }) {
         return result
     }
-    var bytes = Array(string.utf8)
+    let bytes = Array(string.utf8)
     return bytes.withUnsafeBufferPointer { buffer in
         body(buffer)
     }
@@ -286,23 +288,48 @@ private func isKatakanaScalar(_ scalar: UInt32) -> Bool {
     return false
 }
 
-private extension Character {
-    var hexaValues: [String] {
-        var values = [String]()
-        let stringValue = String(self)
-        withUTF8Buffer(stringValue) { buffer in
-            forEachUTF8Scalar(in: buffer) { scalar in
-                let hexa = scalar.hexa
-                let paddingCount = UnicodeScalarConstants.unicodeScalarHexWidth - hexa.count
-                values.append("\\\\U" + String(repeating: "0", count: paddingCount) + hexa)
-            }
-        }
-        return values
-    }
-}
-
 public extension StringProtocol where Self: RangeReplaceableCollection {
-    var asciiRepresentation: String { map { $0.isASCII ? .init($0) : $0.hexaValues.joined() }.joined() }
+    var asciiRepresentation: String {
+        withUTF8Buffer(self) { buffer in
+            guard buffer.contains(where: { $0 > UTF8Constants.asciiMax }) else {
+                return String(decoding: buffer, as: UTF8.self)
+            }
+
+            var output = [UInt8]()
+            output.reserveCapacity(buffer.count * 4)
+            var index = 0
+            while index < buffer.count {
+                let byte = buffer[index]
+                if byte <= UTF8Constants.asciiMax {
+                    output.append(byte)
+                    index += 1
+                    continue
+                }
+
+                guard let decoded = decodeUTF8Scalar(in: buffer, at: index) else {
+                    index += 1
+                    continue
+                }
+                output.append(UTF8Constants.reverseSolidus)
+                output.append(UTF8Constants.reverseSolidus)
+                output.append(UTF8Constants.uppercaseU)
+                for shift in stride(
+                    from: (UnicodeScalarConstants.unicodeScalarHexWidth - 1) * UTF8Constants.bitsPerHexDigit,
+                    through: 0,
+                    by: -UTF8Constants.bitsPerHexDigit
+                ) {
+                    let nibble = UInt8((decoded.scalar >> UInt32(shift)) & UTF8Constants.hexNibbleMask)
+                    output.append(
+                        nibble < UTF8Constants.hexDigitRadix
+                            ? UTF8Constants.asciiZero + nibble
+                            : UTF8Constants.asciiUppercaseA + nibble - UTF8Constants.hexDigitRadix
+                    )
+                }
+                index += decoded.length
+            }
+            return String(decoding: output, as: UTF8.self)
+        }
+    }
 
     func fromAsciiRepresentation() -> String {
         var result = ""
