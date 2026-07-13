@@ -128,6 +128,15 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertEqual("スピードスケート".orderedDistinctKanji, [])
         XCTAssertEqual("𠀋百円𠀋".orderedDistinctKanji, ["𠀋", "百", "円"])
     }
+
+    func testASCIIRepresentationPreservesASCIIAndEncodesUnicodeScalars() {
+        let input = "A雨𠀋e\u{301}"
+        let encoded = "A\\\\U000096E8\\\\U0002000Be\\\\U00000301"
+
+        XCTAssertEqual(input.asciiRepresentation, encoded)
+        XCTAssertEqual(encoded.fromAsciiRepresentation(), input)
+        XCTAssertEqual("plain-ASCII_123".asciiRepresentation, "plain-ASCII_123")
+    }
     
     func testTrailingSokuonEdgeCase() {
         XCTAssertEqual("あっ".withKanaToRomaji, "axtu")
