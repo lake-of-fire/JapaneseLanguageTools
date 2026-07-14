@@ -7,25 +7,99 @@ import Speech
 import AVFoundation
 import Combine
 
+public enum ManabiSpokenAudioIntent: Equatable, Sendable {
+    case readAloud
+    case recordedAudio
+}
+
+@MainActor
+public final class ManabiSpokenAudioSessionLease {
+    fileprivate let id: UUID
+    public let intent: ManabiSpokenAudioIntent
+    private var isReleased = false
+
+    fileprivate init(id: UUID, intent: ManabiSpokenAudioIntent) {
+        self.id = id
+        self.intent = intent
+    }
+
+    deinit {
+        let id = id
+        Task { @MainActor in
+            try? ManabiSpokenAudioSession.release(id: id)
+        }
+    }
+
+    public func release() throws {
+        guard !isReleased else { return }
+        try ManabiSpokenAudioSession.release(id: id)
+        isReleased = true
+    }
+}
+
 @MainActor
 public enum ManabiSpokenAudioSession {
-    private static var activeOwner: String?
+    private static var activeLeases: [UUID: ManabiSpokenAudioIntent] = [:]
 
-    public static func activate(owner: String) throws {
+#if DEBUG
+    static var activationOverrideForTesting: ((ManabiSpokenAudioIntent) throws -> Void)?
+    static var deactivationOverrideForTesting: (() throws -> Void)?
+    static var activeLeaseCountForTesting: Int { activeLeases.count }
+
+    static func resetForTesting() {
+        activeLeases.removeAll()
+        activationOverrideForTesting = nil
+        deactivationOverrideForTesting = nil
+    }
+#endif
+
+    public static func acquire(_ intent: ManabiSpokenAudioIntent) throws -> ManabiSpokenAudioSessionLease {
+        if activeLeases.isEmpty {
+#if DEBUG
+            if let activationOverrideForTesting {
+                try activationOverrideForTesting(intent)
+            } else {
+                try activateAudioSession()
+            }
+#else
+            try activateAudioSession()
+#endif
+        }
+        let lease = ManabiSpokenAudioSessionLease(id: UUID(), intent: intent)
+        activeLeases[lease.id] = intent
+        return lease
+    }
+
+    private static func activateAudioSession() throws {
 #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .spokenAudio, options: .interruptSpokenAudioAndMixWithOthers)
         try session.setActive(true)
 #endif
-        activeOwner = owner
     }
 
-    public static func deactivate(owner: String) throws {
-        guard activeOwner == owner else { return }
+    fileprivate static func release(id: UUID) throws {
+        guard activeLeases[id] != nil else { return }
+        guard activeLeases.count == 1 else {
+            activeLeases.removeValue(forKey: id)
+            return
+        }
+#if DEBUG
+        if let deactivationOverrideForTesting {
+            try deactivationOverrideForTesting()
+        } else {
+            try deactivateAudioSession()
+        }
+#else
+        try deactivateAudioSession()
+#endif
+        activeLeases.removeValue(forKey: id)
+    }
+
+    private static func deactivateAudioSession() throws {
 #if os(iOS)
         try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
 #endif
-        activeOwner = nil
     }
 }
 
