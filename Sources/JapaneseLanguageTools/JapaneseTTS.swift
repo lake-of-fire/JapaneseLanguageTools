@@ -151,9 +151,12 @@ public class JapaneseTTS: NSObject, ObservableObject {
         let player = AVPlayer()
         NotificationCenter.default
             .publisher(for: NSNotification.Name.AVPlayerItemDidPlayToEndTime)
-            .sink { @MainActor [weak self] _ in
-                self?.isPlaying = false
-                JapaneseTTS.unpauseTts()
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.isPlaying = false
+                    self?.releaseAudioSession()
+                    JapaneseTTS.unpauseTts()
+                }
             }
             .store(in: &cancellables)
         return player
@@ -161,11 +164,9 @@ public class JapaneseTTS: NSObject, ObservableObject {
     private var playerItem: AVPlayerItem?
     private var shouldPlayOnceReady = false
     private var cancellables = Set<AnyCancellable>()
+    @MainActor private var audioSessionLease: ManabiSpokenAudioSessionLease?
     
     private static let speechSynth = AVSpeechSynthesizer()
-#if os(iOS)
-    private static let pronunciationAudioSessionOptions: AVAudioSession.CategoryOptions = [.mixWithOthers]
-#endif
     
     // For Instagram-like behavior.
     private static var wasDeviceMuteOverriddenByUnmutingTts = false
@@ -196,6 +197,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
     
     public override init() {
         super.init()
+        Self.speechSynth.delegate = self
         Task { [weak self] in
             await self?.refreshIsEnabled()
         }
@@ -211,7 +213,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
         isEnabledCheckTask = Task { @MainActor [weak self] () -> Bool in
             try Task.checkCancellation()
             let toSet = Self.ttsEnabled()
-            isEnabled = toSet
+            self?.isEnabled = toSet
             return toSet
         }
         if let isEnabledCheckTask {
@@ -258,16 +260,6 @@ public class JapaneseTTS: NSObject, ObservableObject {
         UserDefaults.standard.set(false, forKey: "ttsTemporarilyPaused")
     }
     
-    private static func configAudioSession() {
-#if os(iOS)
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .spokenAudio, options: pronunciationAudioSessionOptions)
-            try session.setActive(true)
-        } catch { }
-#endif
-    }
-    
     @MainActor
     public func speakJapaneseIfUnmuted(expression: String, readingKana: String? = nil) async {
         guard await refreshIsEnabled() else { return }
@@ -287,13 +279,14 @@ public class JapaneseTTS: NSObject, ObservableObject {
         }
     }
     
+    @MainActor
     private func speakSynthesizedJapanese(text: String) {
         //        debugPrint("# speakSynthesizedJapanese", text)
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "ja-JP")
         utterance.volume = 0.9
         //        utterance.rate = 1.3
-        JapaneseTTS.configAudioSession()
+        guard acquireAudioSessionIfNeeded() else { return }
         JapaneseTTS.speechSynth.speak(utterance)
     }
     
@@ -322,7 +315,7 @@ extension JapaneseTTS {
             throw JapaneseTTSError.audioFileDoesNotExist
         }
         
-        refreshAudioSession(isPlaying: false)
+        releaseAudioSession()
         // From Apple docs: It's strongly recommended to set AVPlayer's property automaticallyWaitsToMinimizeStalling to false. Not doing so can lead to poor startup times for playback and poor recovery from stalls.
         player.automaticallyWaitsToMinimizeStalling = false
         
@@ -371,26 +364,31 @@ extension JapaneseTTS {
     
     @MainActor
     private func play() {
+        guard acquireAudioSessionIfNeeded() else {
+            isPlaying = false
+            return
+        }
         isPlaying = true
         JapaneseTTS.temporarilyPauseTts()
-        refreshAudioSession(isPlaying: true)
         player.currentItem?.audioTimePitchAlgorithm = .timeDomain
         player.play()
     }
-    
-    private func refreshAudioSession(isPlaying: Bool) {
-#if os(iOS)
+
+    @MainActor
+    private func acquireAudioSessionIfNeeded() -> Bool {
+        if audioSessionLease != nil { return true }
         do {
-            let session = AVAudioSession.sharedInstance()
-            if isPlaying {
-                try session.setCategory(.playback, mode: .spokenAudio, options: JapaneseTTS.pronunciationAudioSessionOptions)
-                try session.setActive(true)
-            } else {
-                try session.setCategory(.ambient, mode: .spokenAudio, options: JapaneseTTS.pronunciationAudioSessionOptions)
-                try session.setActive(false, options: [.notifyOthersOnDeactivation])
-            }
-        } catch { }
-#endif
+            audioSessionLease = try ManabiSpokenAudioSession.acquire(.pronunciation)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    @MainActor
+    private func releaseAudioSession() {
+        try? audioSessionLease?.release()
+        audioSessionLease = nil
     }
     
     /// Expects hiragana fo rreadingKana
@@ -435,6 +433,7 @@ extension JapaneseTTS: AVSpeechSynthesizerDelegate {
     
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         Task { @MainActor in
+            releaseAudioSession()
             isPlaying = false
             JapaneseTTS.unpauseTts()
         }
@@ -454,6 +453,7 @@ extension JapaneseTTS: AVSpeechSynthesizerDelegate {
     
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in
+            releaseAudioSession()
             JapaneseTTS.unpauseTts()
             isPlaying = false
         }
