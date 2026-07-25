@@ -24,6 +24,7 @@ public final class ManabiSpokenAudioSessionLease {
     }
 
     deinit {
+        guard !isReleased else { return }
         let id = id
         Task { @MainActor in
             try? ManabiSpokenAudioSession.release(id: id)
@@ -32,8 +33,8 @@ public final class ManabiSpokenAudioSessionLease {
 
     public func release() throws {
         guard !isReleased else { return }
+        defer { isReleased = true }
         try ManabiSpokenAudioSession.release(id: id)
-        isReleased = true
     }
 }
 
@@ -80,10 +81,9 @@ public enum ManabiSpokenAudioSession {
 
     fileprivate static func release(id: UUID) throws {
         guard activeLeases[id] != nil else { return }
-        guard activeLeases.count == 1 else {
-            activeLeases.removeValue(forKey: id)
-            return
-        }
+        let wasFinalLease = activeLeases.count == 1
+        activeLeases.removeValue(forKey: id)
+        guard wasFinalLease else { return }
 #if DEBUG
         if let deactivationOverrideForTesting {
             try deactivationOverrideForTesting()
@@ -93,7 +93,6 @@ public enum ManabiSpokenAudioSession {
 #else
         try deactivateAudioSession()
 #endif
-        activeLeases.removeValue(forKey: id)
     }
 
     private static func deactivateAudioSession() throws {
