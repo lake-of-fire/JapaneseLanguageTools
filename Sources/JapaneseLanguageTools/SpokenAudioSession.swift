@@ -30,11 +30,12 @@ public final class ManabiSpokenAudioSessionLease {
 
     public func release() throws {
         guard !isReleased else { return }
+        defer { isReleased = true }
         try ManabiSpokenAudioSession.release(id: id)
-        isReleased = true
     }
 
     deinit {
+        guard !isReleased else { return }
         let id = id
         Task { @MainActor in
             try? ManabiSpokenAudioSession.release(id: id)
@@ -44,18 +45,22 @@ public final class ManabiSpokenAudioSessionLease {
 
 @MainActor
 public enum ManabiSpokenAudioSession {
+    private enum AppliedState: Equatable {
+        case inactive
+        case configured(ManabiSpokenAudioIntent)
+        case unknown
+    }
+
     private static var activeLeases: [UUID: ManabiSpokenAudioIntent] = [:]
+    private static var appliedState = AppliedState.inactive
 
     static var configurationOverrideForTesting: ((ManabiSpokenAudioIntent) throws -> Void)?
     static var deactivationOverrideForTesting: (() throws -> Void)?
     static var activeLeaseCountForTesting: Int { activeLeases.count }
 
     public static func acquire(_ intent: ManabiSpokenAudioIntent) throws -> ManabiSpokenAudioSessionLease {
-        let currentIntent = effectiveIntent(for: activeLeases.values)
         let nextIntent = effectiveIntent(for: Array(activeLeases.values) + [intent])
-        if currentIntent != nextIntent, let nextIntent {
-            try configureAudioSession(for: nextIntent)
-        }
+        try transitionAppliedState(to: nextIntent)
 
         let lease = ManabiSpokenAudioSessionLease(id: UUID(), intent: intent)
         activeLeases[lease.id] = intent
@@ -65,23 +70,37 @@ public enum ManabiSpokenAudioSession {
     fileprivate static func release(id: UUID) throws {
         guard activeLeases[id] != nil else { return }
 
-        let currentIntent = effectiveIntent(for: activeLeases.values)
         var remainingLeases = activeLeases
         remainingLeases.removeValue(forKey: id)
         let nextIntent = effectiveIntent(for: remainingLeases.values)
-
-        if let nextIntent {
-            if nextIntent != currentIntent {
-                try configureAudioSession(for: nextIntent)
-            }
-        } else {
-            try deactivateAudioSession()
-        }
+        // Logical ownership ends regardless of whether the platform transition
+        // succeeds. The separately tracked applied state makes the next operation
+        // retry an uncertain configuration instead of retaining an abandoned lease.
         activeLeases = remainingLeases
+        try transitionAppliedState(to: nextIntent)
+    }
+
+    private static func transitionAppliedState(
+        to intent: ManabiSpokenAudioIntent?
+    ) throws {
+        let targetState = intent.map(AppliedState.configured) ?? .inactive
+        guard appliedState != targetState else { return }
+        do {
+            if let intent {
+                try configureAudioSession(for: intent)
+            } else {
+                try deactivateAudioSession()
+            }
+            appliedState = targetState
+        } catch {
+            appliedState = .unknown
+            throw error
+        }
     }
 
     static func resetForTesting() {
         activeLeases.removeAll()
+        appliedState = .inactive
         configurationOverrideForTesting = nil
         deactivationOverrideForTesting = nil
     }
