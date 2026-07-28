@@ -6,6 +6,15 @@ import UIKit
 import Speech
 import Combine
 
+struct JapanesePronunciationAudioDownloader {
+    var download: (URL) async throws -> URL
+
+    static let live = Self { url in
+        let (temporaryURL, _) = try await URLSession.shared.download(from: url)
+        return temporaryURL
+    }
+}
+
 #if os(iOS)
 @MainActor
 private final class SafeSilentSwitchDetector {
@@ -141,7 +150,16 @@ public class JapaneseTTS: NSObject, ObservableObject {
     @MainActor
     @Published public var isPlaying = false
     
-    private var isEnabledCheckTask: Task<Bool, Error>?
+    @MainActor
+    private var speechRequestTask: Task<Void, Never>?
+    @MainActor
+    private var activeSpeechRequestID: UUID?
+    @MainActor
+    private var synthesizedJapaneseVoice: AVSpeechSynthesisVoice?
+    @MainActor
+    private var hasResolvedSynthesizedJapaneseVoice = false
+
+    var pronunciationAudioDownloader = JapanesePronunciationAudioDownloader.live
     
     enum JapaneseTTSError: Error {
         case audioFileDoesNotExist
@@ -151,8 +169,9 @@ public class JapaneseTTS: NSObject, ObservableObject {
         let player = AVPlayer()
         NotificationCenter.default
             .publisher(for: NSNotification.Name.AVPlayerItemDidPlayToEndTime)
+            .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                Task { @MainActor in
+                MainActor.assumeIsolated {
                     self?.isPlaying = false
                     self?.releaseAudioSession()
                     JapaneseTTS.unpauseTts()
@@ -162,6 +181,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
         return player
     }()
     private var playerItem: AVPlayerItem?
+    private var playerItemStatusCancellable: AnyCancellable?
     private var shouldPlayOnceReady = false
     private var cancellables = Set<AnyCancellable>()
     @MainActor private var audioSessionLease: ManabiSpokenAudioSessionLease?
@@ -198,38 +218,37 @@ public class JapaneseTTS: NSObject, ObservableObject {
     public override init() {
         super.init()
         Self.speechSynth.delegate = self
-        Task { [weak self] in
-            await self?.refreshIsEnabled()
+        NotificationCenter.default
+            .addObserver(
+                self,
+                selector: #selector(handleAvailableVoicesDidChange),
+                name: AVSpeechSynthesizer.availableVoicesDidChangeNotification,
+                object: nil
+            )
+        Task { @MainActor [weak self] in
+            self?.refreshIsEnabled()
         }
     }
-    
-    //    deinit {
-    //        isEnabledCheckTask?.cancel()
-    //    }
-    
+
+    @objc
     @MainActor
-    private func refreshIsEnabled() async -> Bool {
-        isEnabledCheckTask?.cancel()
-        isEnabledCheckTask = Task { @MainActor [weak self] () -> Bool in
-            try Task.checkCancellation()
-            let toSet = Self.ttsEnabled()
-            self?.isEnabled = toSet
-            return toSet
-        }
-        if let isEnabledCheckTask {
-            do {
-                return try await isEnabledCheckTask.value
-            } catch {
-                return false
-            }
-        }
-        return false
+    private func handleAvailableVoicesDidChange() {
+        synthesizedJapaneseVoice = nil
+        hasResolvedSynthesizedJapaneseVoice = false
+    }
+
+    @discardableResult
+    @MainActor
+    private func refreshIsEnabled() -> Bool {
+        let enabled = Self.ttsEnabled()
+        isEnabled = enabled
+        return enabled
     }
     
     /// Used for the user manually tapping to toggle, not for other programmatic manipulation.
     @MainActor
     public func toggleTts() async {
-        let enabled = await refreshIsEnabled()
+        let enabled = refreshIsEnabled()
 
 #if os(iOS)
         if enabled && SafeSilentSwitchDetector.shared.isMute {
@@ -262,19 +281,53 @@ public class JapaneseTTS: NSObject, ObservableObject {
     
     @MainActor
     public func speakJapaneseIfUnmuted(expression: String, readingKana: String? = nil) async {
-        guard await refreshIsEnabled() else { return }
-        speakJapanese(expression: expression, readingKana: readingKana)
+        guard refreshIsEnabled(), !Task.isCancelled else { return }
+        speechRequestTask?.cancel()
+        speechRequestTask = nil
+        let requestID = UUID()
+        activeSpeechRequestID = requestID
+        await performSpeakJapanese(
+            expression: expression,
+            readingKana: readingKana,
+            requestID: requestID
+        )
     }
     
     @MainActor
     public func speakJapanese(expression: String, readingKana: String? = nil) {
+        speechRequestTask?.cancel()
+        let requestID = UUID()
+        activeSpeechRequestID = requestID
+        speechRequestTask = Task { @MainActor [weak self] in
+            await self?.performSpeakJapanese(
+                expression: expression,
+                readingKana: readingKana,
+                requestID: requestID
+            )
+        }
+    }
+
+    @MainActor
+    private func performSpeakJapanese(
+        expression: String,
+        readingKana: String?,
+        requestID: UUID
+    ) async {
+        guard !Task.isCancelled, activeSpeechRequestID == requestID else { return }
         guard let readingKana = readingKana else {
             speakSynthesizedJapanese(text: hiraganaToKatakana(text: expression))
             return
         }
         do {
-            try playAudio(expression: expression, readingKana: readingKana)
+            try await playAudio(
+                expression: expression,
+                readingKana: readingKana,
+                requestID: requestID
+            )
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled, activeSpeechRequestID == requestID else { return }
             speakSynthesizedJapanese(text: hiraganaToKatakana(text: readingKana))
         }
     }
@@ -283,11 +336,20 @@ public class JapaneseTTS: NSObject, ObservableObject {
     private func speakSynthesizedJapanese(text: String) {
         //        debugPrint("# speakSynthesizedJapanese", text)
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "ja-JP")
+        utterance.voice = configuredSynthesizedJapaneseVoice()
         utterance.volume = 0.9
         //        utterance.rate = 1.3
         guard acquireAudioSessionIfNeeded() else { return }
         JapaneseTTS.speechSynth.speak(utterance)
+    }
+
+    @MainActor
+    private func configuredSynthesizedJapaneseVoice() -> AVSpeechSynthesisVoice? {
+        if !hasResolvedSynthesizedJapaneseVoice {
+            synthesizedJapaneseVoice = AVSpeechSynthesisVoice(language: "ja-JP")
+            hasResolvedSynthesizedJapaneseVoice = true
+        }
+        return synthesizedJapaneseVoice
     }
     
     /// Helper: katakana is pronounced more accurately for words.
@@ -310,8 +372,15 @@ extension JapaneseTTS {
     // MARK: Audio player
     
     @MainActor
-    private func playAudio(expression: String, readingKana: String) throws {
-        guard TofuguAudioIndex.audioURL(term: expression, readingKana: readingKana) != nil else {
+    private func playAudio(
+        expression: String,
+        readingKana: String,
+        requestID: UUID
+    ) async throws {
+        guard let remoteAudioURL = TofuguAudioIndex.audioURL(
+            term: expression,
+            readingKana: readingKana
+        ) else {
             throw JapaneseTTSError.audioFileDoesNotExist
         }
         
@@ -328,35 +397,48 @@ extension JapaneseTTS {
         let localAudioPath = audioDirectory.appendingPathComponent(filename)
         
         if (try? localAudioPath.checkResourceIsReachable()) ?? false {
-            loadAndPlayAudio(url: localAudioPath, readingKana: readingKana)
+            guard activeSpeechRequestID == requestID else { throw CancellationError() }
+            loadAndPlayAudio(url: localAudioPath, readingKana: readingKana, requestID: requestID)
         } else {
-            download(expression: expression, readingKana: readingKana, toPath: localAudioPath) { [weak self] audioPath in
-                guard let audioPath = audioPath else {
-                    self?.speakSynthesizedJapanese(text: readingKana)
-                    return
+            let temporaryURL = try await pronunciationAudioDownloader.download(remoteAudioURL)
+            try Task.checkCancellation()
+            guard activeSpeechRequestID == requestID else { throw CancellationError() }
+            if !FileManager.default.fileExists(atPath: localAudioPath.path) {
+                do {
+                    try FileManager.default.moveItem(at: temporaryURL, to: localAudioPath)
+                } catch {
+                    guard FileManager.default.fileExists(atPath: localAudioPath.path) else {
+                        throw error
+                    }
                 }
-                self?.loadAndPlayAudio(url: audioPath, readingKana: readingKana)
             }
+            try Task.checkCancellation()
+            guard activeSpeechRequestID == requestID else { throw CancellationError() }
+            loadAndPlayAudio(url: localAudioPath, readingKana: readingKana, requestID: requestID)
         }
     }
     
     @MainActor
-    private func loadAndPlayAudio(url: URL, readingKana: String) {
+    private func loadAndPlayAudio(url: URL, readingKana: String, requestID: UUID) {
         let playerItem = AVPlayerItem(url: url)
         self.playerItem = playerItem
-        playerItem.publisher(for: \.status).receive(on: RunLoop.main).sink { @MainActor [weak self] status in
-            switch playerItem.status {
-            case .readyToPlay:
-                if self?.shouldPlayOnceReady ?? false {
+        playerItemStatusCancellable = playerItem.publisher(for: \.status).receive(on: RunLoop.main).sink { [weak self] status in
+            MainActor.assumeIsolated {
+                guard self?.playerItem === playerItem,
+                      self?.activeSpeechRequestID == requestID else { return }
+                switch status {
+                case .readyToPlay:
+                    if self?.shouldPlayOnceReady ?? false {
+                        self?.shouldPlayOnceReady = false
+                        self?.play()
+                    }
+                case .failed:
+                    self?.speakSynthesizedJapanese(text: readingKana)
                     self?.shouldPlayOnceReady = false
-                    self?.play()
+                default: break
                 }
-            case .failed:
-                self?.speakSynthesizedJapanese(text: readingKana)
-                self?.shouldPlayOnceReady = false
-            default: break
             }
-        }.store(in: &cancellables)
+        }
         player.replaceCurrentItem(with: playerItem)
         play()
         shouldPlayOnceReady = true
@@ -391,36 +473,6 @@ extension JapaneseTTS {
         audioSessionLease = nil
     }
     
-    /// Expects hiragana fo rreadingKana
-    private func download(expression: String, readingKana: String, toPath path: URL, completion: @escaping ((URL?) -> Void)) {
-        guard let audioURL = TofuguAudioIndex.audioURL(term: expression, readingKana: readingKana) else {
-            completion(nil)
-            return
-        }
-        
-        Task.detached {
-            let task = URLSession.shared.downloadTask(with: audioURL) { localURL, urlResponse, error in
-                guard let localURL = localURL else {
-                    Task { @MainActor in
-                        completion(nil)
-                    }
-                    return
-                }
-                do {
-                    try FileManager.default.moveItem(at: localURL, to: path)
-                } catch {
-                    Task { @MainActor in
-                        completion(nil)
-                    }
-                }
-                
-                Task { @MainActor in
-                    completion(path)
-                }
-            }
-            task.resume()
-        }
-    }
 }
 
 extension JapaneseTTS: AVSpeechSynthesizerDelegate {
