@@ -171,7 +171,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
             .publisher(for: NSNotification.Name.AVPlayerItemDidPlayToEndTime)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                MainActor.assumeIsolated {
+                Task { @MainActor [weak self] in
                     self?.isPlaying = false
                     self?.releaseAudioSession()
                     JapaneseTTS.unpauseTts()
@@ -218,23 +218,26 @@ public class JapaneseTTS: NSObject, ObservableObject {
     public override init() {
         super.init()
         Self.speechSynth.delegate = self
-        NotificationCenter.default
-            .addObserver(
-                self,
-                selector: #selector(handleAvailableVoicesDidChange),
-                name: AVSpeechSynthesizer.availableVoicesDidChangeNotification,
-                object: nil
-            )
+        if #available(iOS 17.0, macOS 14.0, watchOS 10.0, *) {
+            NotificationCenter.default
+                .addObserver(
+                    self,
+                    selector: #selector(handleAvailableVoicesDidChange),
+                    name: AVSpeechSynthesizer.availableVoicesDidChangeNotification,
+                    object: nil
+                )
+        }
         Task { @MainActor [weak self] in
             self?.refreshIsEnabled()
         }
     }
 
-    @objc
-    @MainActor
+    @objc nonisolated
     private func handleAvailableVoicesDidChange() {
-        synthesizedJapaneseVoice = nil
-        hasResolvedSynthesizedJapaneseVoice = false
+        Task { @MainActor [weak self] in
+            self?.synthesizedJapaneseVoice = nil
+            self?.hasResolvedSynthesizedJapaneseVoice = false
+        }
     }
 
     @discardableResult
@@ -423,7 +426,7 @@ extension JapaneseTTS {
         let playerItem = AVPlayerItem(url: url)
         self.playerItem = playerItem
         playerItemStatusCancellable = playerItem.publisher(for: \.status).receive(on: RunLoop.main).sink { [weak self] status in
-            MainActor.assumeIsolated {
+            Task { @MainActor [weak self] in
                 guard self?.playerItem === playerItem,
                       self?.activeSpeechRequestID == requestID else { return }
                 switch status {
