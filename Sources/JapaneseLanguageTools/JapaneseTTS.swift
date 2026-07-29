@@ -218,13 +218,15 @@ public class JapaneseTTS: NSObject, ObservableObject {
     public override init() {
         super.init()
         Self.speechSynth.delegate = self
-        NotificationCenter.default
-            .addObserver(
-                self,
-                selector: #selector(handleAvailableVoicesDidChange),
-                name: AVSpeechSynthesizer.availableVoicesDidChangeNotification,
-                object: nil
-            )
+        if #available(iOS 17.0, *) {
+            NotificationCenter.default
+                .addObserver(
+                    self,
+                    selector: #selector(handleAvailableVoicesDidChange),
+                    name: AVSpeechSynthesizer.availableVoicesDidChangeNotification,
+                    object: nil
+                )
+        }
         Task { @MainActor [weak self] in
             self?.refreshIsEnabled()
         }
