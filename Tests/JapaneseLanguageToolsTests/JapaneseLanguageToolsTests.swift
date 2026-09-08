@@ -2,6 +2,32 @@ import XCTest
 @testable import JapaneseLanguageTools
 
 final class JapaneseLanguageToolsTests: XCTestCase {
+    func testDigitsOnlyIsConsistentAcrossStringProtocolDispatch() {
+        func generic<S: StringProtocol>(_ value: S) -> Bool {
+            value.isASCIIOrFullWidthDigitsOnly
+        }
+        for (value, expected) in [("", false), ("123", true), ("１２３", true), ("1２3", true), ("1猫", false)] {
+            XCTAssertEqual(value.isASCIIOrFullWidthDigitsOnly, expected)
+            XCTAssertEqual(value[...].isASCIIOrFullWidthDigitsOnly, expected)
+            XCTAssertEqual(generic(value), expected)
+        }
+    }
+
+    func testPronunciationDownloadRejectsHTTPErrorBodies() throws {
+        let url = URL(string: "https://example.com/audio.mp3")!
+        for status in [200, 206] {
+            let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!
+            XCTAssertNoThrow(try JapanesePronunciationAudioDownloader.validate(response: response))
+        }
+        for status in [301, 404, 429, 500] {
+            let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!
+            XCTAssertThrowsError(try JapanesePronunciationAudioDownloader.validate(response: response))
+        }
+        XCTAssertThrowsError(try JapanesePronunciationAudioDownloader.validate(
+            response: URLResponse(url: url, mimeType: nil, expectedContentLength: 0, textEncodingName: nil)
+        ))
+    }
+
     func testKanaScriptConversionPreservesNoOpInputAndConvertsMatchingScript() {
         XCTAssertEqual("かな漢字".withKatakanaToHiragana, "かな漢字")
         XCTAssertEqual("カナ漢字".withKatakanaToHiragana, "かな漢字")
