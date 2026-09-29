@@ -1,0 +1,23 @@
+name: Port spoken audio priority
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Sources/JapaneseLanguageTools/JapaneseTTS.swift'
+      - 'Tests/JapaneseLanguageToolsTests/SpokenAudioSessionPriorityTests.swift'
+      - '.github/workflows/port-spoken-audio-priority.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  priority:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Focused priority tests
+        run: swift test -c debug --filter SpokenAudioSessionPriorityTests
+      - name: Release build
+        run: swift build -c release

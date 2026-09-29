@@ -28,6 +28,14 @@ public enum ManabiSpokenAudioIntent: Equatable, Sendable {
     case readAloud
     case recordedAudio
     case pronunciation
+
+    fileprivate var priority: Int {
+        switch self {
+        case .pronunciation: 0
+        case .readAloud: 1
+        case .recordedAudio: 2
+        }
+    }
 }
 
 @MainActor
@@ -58,7 +66,14 @@ public final class ManabiSpokenAudioSessionLease {
 
 @MainActor
 public enum ManabiSpokenAudioSession {
+    private enum AppliedState: Equatable {
+        case inactive
+        case configured(ManabiSpokenAudioIntent)
+        case unknown
+    }
+
     private static var activeLeases: [UUID: ManabiSpokenAudioIntent] = [:]
+    private static var appliedState = AppliedState.inactive
 
 #if DEBUG
     static var activationOverrideForTesting: ((ManabiSpokenAudioIntent) throws -> Void)?
@@ -67,49 +82,87 @@ public enum ManabiSpokenAudioSession {
 
     static func resetForTesting() {
         activeLeases.removeAll()
+        appliedState = .inactive
         activationOverrideForTesting = nil
         deactivationOverrideForTesting = nil
     }
 #endif
 
     public static func acquire(_ intent: ManabiSpokenAudioIntent) throws -> ManabiSpokenAudioSessionLease {
-        if activeLeases.isEmpty {
-#if DEBUG
-            if let activationOverrideForTesting {
-                try activationOverrideForTesting(intent)
-            } else {
-                try activateAudioSession()
-            }
-#else
-            try activateAudioSession()
-#endif
-        }
+        let nextIntent = effectiveIntent(for: Array(activeLeases.values) + [intent])
+        try transitionAppliedState(to: nextIntent)
+
         let lease = ManabiSpokenAudioSessionLease(id: UUID(), intent: intent)
         activeLeases[lease.id] = intent
         return lease
     }
 
-    private static func activateAudioSession() throws {
-#if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio, options: .interruptSpokenAudioAndMixWithOthers)
-        try session.setActive(true)
-#endif
-    }
-
     fileprivate static func release(id: UUID) throws {
         guard activeLeases[id] != nil else { return }
-        let wasFinalLease = activeLeases.count == 1
-        activeLeases.removeValue(forKey: id)
-        guard wasFinalLease else { return }
+
+        var remainingLeases = activeLeases
+        remainingLeases.removeValue(forKey: id)
+        let nextIntent = effectiveIntent(for: remainingLeases.values)
+
+        // Logical ownership ends even if the platform transition fails. Keeping
+        // a separate applied state means the next operation retries an unknown
+        // platform configuration instead of retaining an abandoned lease.
+        activeLeases = remainingLeases
+        try transitionAppliedState(to: nextIntent)
+    }
+
+    private static func effectiveIntent<S: Sequence>(
+        for intents: S
+    ) -> ManabiSpokenAudioIntent? where S.Element == ManabiSpokenAudioIntent {
+        intents.max { $0.priority < $1.priority }
+    }
+
+    private static func transitionAppliedState(
+        to intent: ManabiSpokenAudioIntent?
+    ) throws {
+        let targetState = intent.map(AppliedState.configured) ?? .inactive
+        guard appliedState != targetState else { return }
+
+        do {
+            if let intent {
 #if DEBUG
-        if let deactivationOverrideForTesting {
-            try deactivationOverrideForTesting()
-        } else {
-            try deactivateAudioSession()
-        }
+                if let activationOverrideForTesting {
+                    try activationOverrideForTesting(intent)
+                } else {
+                    try activateAudioSession(for: intent)
+                }
 #else
-        try deactivateAudioSession()
+                try activateAudioSession(for: intent)
+#endif
+            } else {
+#if DEBUG
+                if let deactivationOverrideForTesting {
+                    try deactivationOverrideForTesting()
+                } else {
+                    try deactivateAudioSession()
+                }
+#else
+                try deactivateAudioSession()
+#endif
+            }
+            appliedState = targetState
+        } catch {
+            appliedState = .unknown
+            throw error
+        }
+    }
+
+    private static func activateAudioSession(for intent: ManabiSpokenAudioIntent) throws {
+#if os(iOS)
+        let options: AVAudioSession.CategoryOptions = switch intent {
+        case .pronunciation:
+            [.mixWithOthers]
+        case .readAloud, .recordedAudio:
+            [.interruptSpokenAudioAndMixWithOthers]
+        }
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio, options: options)
+        try session.setActive(true)
 #endif
     }
 
