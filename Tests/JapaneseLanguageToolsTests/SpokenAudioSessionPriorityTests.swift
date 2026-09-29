@@ -4,12 +4,9 @@ import XCTest
 #if DEBUG
 @MainActor
 final class SpokenAudioSessionPriorityTests: XCTestCase {
-    override func tearDown() {
-        ManabiSpokenAudioSession.resetForTesting()
-        super.tearDown()
-    }
-
     func testLeasesReconcileIntentPriorityAndDeactivateAfterFinalRelease() throws {
+        ManabiSpokenAudioSession.resetForTesting()
+        defer { ManabiSpokenAudioSession.resetForTesting() }
         var events: [String] = []
         ManabiSpokenAudioSession.activationOverrideForTesting = {
             events.append("configure:\($0)")
@@ -47,6 +44,8 @@ final class SpokenAudioSessionPriorityTests: XCTestCase {
     }
 
     func testLowerPriorityLeaseDoesNotReconfigureHigherPrioritySession() throws {
+        ManabiSpokenAudioSession.resetForTesting()
+        defer { ManabiSpokenAudioSession.resetForTesting() }
         var configured: [ManabiSpokenAudioIntent] = []
         ManabiSpokenAudioSession.activationOverrideForTesting = { configured.append($0) }
         ManabiSpokenAudioSession.deactivationOverrideForTesting = {}
@@ -61,6 +60,8 @@ final class SpokenAudioSessionPriorityTests: XCTestCase {
     }
 
     func testFailedHigherPriorityAcquisitionKeepsExistingLease() throws {
+        ManabiSpokenAudioSession.resetForTesting()
+        defer { ManabiSpokenAudioSession.resetForTesting() }
         enum TestError: Error { case rejected }
         var rejectRecordedAudio = true
         ManabiSpokenAudioSession.activationOverrideForTesting = { intent in
@@ -82,6 +83,8 @@ final class SpokenAudioSessionPriorityTests: XCTestCase {
     }
 
     func testFailedFinalDeactivationEndsLogicalOwnershipAndRetriesUnknownState() throws {
+        ManabiSpokenAudioSession.resetForTesting()
+        defer { ManabiSpokenAudioSession.resetForTesting() }
         enum TestError: Error { case rejected }
         var rejectDeactivation = true
         var configurations = 0
@@ -104,6 +107,8 @@ final class SpokenAudioSessionPriorityTests: XCTestCase {
     }
 
     func testFailedPriorityDowngradeRemovesReleasedLeaseAndRetriesUnknownState() throws {
+        ManabiSpokenAudioSession.resetForTesting()
+        defer { ManabiSpokenAudioSession.resetForTesting() }
         enum TestError: Error { case rejected }
         var configurations: [ManabiSpokenAudioIntent] = []
         var rejectPronunciation = false
