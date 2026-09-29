@@ -3,21 +3,28 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'Sources/JapaneseLanguageTools/SpokenAudioSession.swift'
       - 'Sources/JapaneseLanguageTools/JapaneseTTS.swift'
       - 'Tests/JapaneseLanguageToolsTests/SpokenAudioSessionPriorityTests.swift'
+      - 'Tools/test-spoken-audio-priority-port.sh'
       - '.github/workflows/port-spoken-audio-priority.yml'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   priority:
-    runs-on: macos-15
-    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Focused priority tests
-        run: swift test -c debug --filter SpokenAudioSessionPriorityTests
-      - name: Release build
-        run: swift build -c release
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.2.1'
+      - name: Test exact production session owner
+        run: bash Tools/test-spoken-audio-priority-port.sh
