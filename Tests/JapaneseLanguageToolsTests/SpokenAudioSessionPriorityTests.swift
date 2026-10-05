@@ -64,6 +64,32 @@ final class SpokenAudioSessionPriorityTests: XCTestCase {
         }
     }
 
+    func testReleaseIsIdempotentAndPreservesReplacementOwnership() async throws {
+        try await MainActor.run {
+            ManabiSpokenAudioSession.resetForTesting()
+            defer { ManabiSpokenAudioSession.resetForTesting() }
+
+            var configurations = 0
+            var deactivations = 0
+            ManabiSpokenAudioSession.activationOverrideForTesting = { _ in configurations += 1 }
+            ManabiSpokenAudioSession.deactivationOverrideForTesting = { deactivations += 1 }
+
+            let releasedLease = try ManabiSpokenAudioSession.acquire(.readAloud)
+            try releasedLease.release()
+            let replacement = try ManabiSpokenAudioSession.acquire(.readAloud)
+            try releasedLease.release()
+
+            XCTAssertEqual(configurations, 2)
+            XCTAssertEqual(deactivations, 1)
+            XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 1)
+
+            try replacement.release()
+            try replacement.release()
+            XCTAssertEqual(deactivations, 2)
+            XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 0)
+        }
+    }
+
     func testFailedHigherPriorityAcquisitionKeepsExistingLease() async throws {
         try await MainActor.run {
             ManabiSpokenAudioSession.resetForTesting()

@@ -3,7 +3,15 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/spoken-audio-priority.XXXXXX")"
-trap 'rm -rf "$work"' EXIT
+cleanup() {
+    if [[ "$(uname -s)" == "Darwin" && -d "$HOME/.Trash" ]]; then
+        local trashDestination
+        trashDestination="$(mktemp -d "$HOME/.Trash/spoken-audio-priority.XXXXXX")"
+        mv "$work" "$trashDestination/"
+    fi
+    # Without a Darwin Trash directory, retain the fresh scratch directory.
+}
+trap cleanup EXIT
 
 mkdir -p "$work/Sources/JapaneseLanguageTools" "$work/Tests/JapaneseLanguageToolsTests"
 cp "$root/Sources/JapaneseLanguageTools/SpokenAudioSession.swift"    "$work/Sources/JapaneseLanguageTools/SpokenAudioSession.swift"
@@ -30,7 +38,13 @@ let package = Package(
 )
 MANIFEST
 
-swift --version
-swift test   --package-path "$work"   -c debug   --filter SpokenAudioSessionPriorityTests   -Xswiftc -warnings-as-errors
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    swiftCommand=(xcrun swift)
+else
+    swiftCommand=(swift)
+fi
 
-swift build   --package-path "$work"   -c release   -Xswiftc -warnings-as-errors
+"${swiftCommand[@]}" --version
+"${swiftCommand[@]}" test   --package-path "$work"   -c debug   --filter SpokenAudioSessionPriorityTests   -Xswiftc -warnings-as-errors
+
+"${swiftCommand[@]}" build   --package-path "$work"   -c release   -Xswiftc -warnings-as-errors
