@@ -271,6 +271,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
     // exercised without media hardware.
     @MainActor var pronunciationAudioURLResolver = TofuguAudioIndex.audioURL
     @MainActor var recordedAudioPlaybackOverride: ((URL, String, @escaping () -> Void, @escaping () -> Void, @escaping () -> Void) -> Void)?
+    @MainActor var recordedAudioStartOverride: (() -> Void)?
     @MainActor var synthesizedSpeechStartOverride: ((AVSpeechUtterance) -> Void)?
     @MainActor var speechRequestCompletionOverride: (() -> Void)?
 #endif
@@ -411,9 +412,9 @@ public class JapaneseTTS: NSObject, ObservableObject {
     }
 
     @MainActor
-    private func acquirePronunciationSession() {
+    private func acquirePronunciationSession() throws {
         if pronunciationSessionLease == nil {
-            pronunciationSessionLease = try? ManabiSpokenAudioSession.acquire(.pronunciation)
+            pronunciationSessionLease = try ManabiSpokenAudioSession.acquire(.pronunciation)
         }
     }
 
@@ -489,8 +490,13 @@ public class JapaneseTTS: NSObject, ObservableObject {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = configuredSynthesizedJapaneseVoice()
         utterance.volume = 0.9
+        do {
+            try acquirePronunciationSession()
+        } catch {
+            finishSpeechRequest(requestID)
+            return
+        }
         activeUtterance = utterance
-        acquirePronunciationSession()
         isPlaying = true
 #if DEBUG
         if let synthesizedSpeechStartOverride {
@@ -684,7 +690,18 @@ extension JapaneseTTS {
         case .readyToPlay:
             guard shouldPlayOnceReady else { return }
             shouldPlayOnceReady = false
-            acquirePronunciationSession()
+            do {
+                try acquirePronunciationSession()
+            } catch {
+                finishSpeechRequest(requestID)
+                return
+            }
+#if DEBUG
+            if let recordedAudioStartOverride {
+                recordedAudioStartOverride()
+                return
+            }
+#endif
             if let item {
                 item.audioTimePitchAlgorithm = .timeDomain
                 player.play()
