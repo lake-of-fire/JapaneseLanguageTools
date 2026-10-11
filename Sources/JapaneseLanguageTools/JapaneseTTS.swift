@@ -165,28 +165,16 @@ public class JapaneseTTS: NSObject, ObservableObject {
         case audioFileDoesNotExist
     }
     
-    private lazy var player: AVPlayer = {
-        let player = AVPlayer()
-        NotificationCenter.default
-            .publisher(for: NSNotification.Name.AVPlayerItemDidPlayToEndTime)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.isPlaying = false
-                    self?.releaseAudioSession()
-                    JapaneseTTS.unpauseTts()
-                }
-            }
-            .store(in: &cancellables)
-        return player
-    }()
+    private let player = AVPlayer()
     private var playerItem: AVPlayerItem?
     private var playerItemStatusCancellable: AnyCancellable?
+    private var playerItemCompletionCancellables = Set<AnyCancellable>()
     private var shouldPlayOnceReady = false
-    private var cancellables = Set<AnyCancellable>()
     @MainActor private var audioSessionLease: ManabiSpokenAudioSessionLease?
     
-    private static let speechSynth = AVSpeechSynthesizer()
+    private let speechSynth = AVSpeechSynthesizer()
+    @MainActor private var activeUtterance: AVSpeechUtterance?
+    @MainActor var synthesizedSpeechStartOverride: ((AVSpeechUtterance) -> Void)?
     
     // For Instagram-like behavior.
     private static var wasDeviceMuteOverriddenByUnmutingTts = false
@@ -217,7 +205,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
     
     public override init() {
         super.init()
-        Self.speechSynth.delegate = self
+        speechSynth.delegate = self
         if #available(iOS 17.0, macOS 14.0, watchOS 10.0, *) {
             NotificationCenter.default
                 .addObserver(
@@ -283,10 +271,35 @@ public class JapaneseTTS: NSObject, ObservableObject {
     }
     
     @MainActor
+    private func resetPronunciationPlayback() {
+        // Retire callback authority before stopping native playback: stop can enqueue
+        // completion callbacks which must not release the next request's lease.
+        activeUtterance = nil
+        playerItemStatusCancellable = nil
+        playerItemCompletionCancellables.removeAll()
+        shouldPlayOnceReady = false
+        playerItem = nil
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        speechSynth.stopSpeaking(at: .immediate)
+        releaseAudioSession()
+        isPlaying = false
+        JapaneseTTS.unpauseTts()
+    }
+
+    @MainActor
+    private func finishSpeechRequest(_ requestID: UUID) {
+        guard activeSpeechRequestID == requestID else { return }
+        activeSpeechRequestID = nil
+        resetPronunciationPlayback()
+    }
+
+    @MainActor
     public func speakJapaneseIfUnmuted(expression: String, readingKana: String? = nil) async {
         guard refreshIsEnabled(), !Task.isCancelled else { return }
         speechRequestTask?.cancel()
         speechRequestTask = nil
+        resetPronunciationPlayback()
         let requestID = UUID()
         activeSpeechRequestID = requestID
         await performSpeakJapanese(
@@ -299,6 +312,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
     @MainActor
     public func speakJapanese(expression: String, readingKana: String? = nil) {
         speechRequestTask?.cancel()
+        resetPronunciationPlayback()
         let requestID = UUID()
         activeSpeechRequestID = requestID
         speechRequestTask = Task { @MainActor [weak self] in
@@ -318,7 +332,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
     ) async {
         guard !Task.isCancelled, activeSpeechRequestID == requestID else { return }
         guard let readingKana = readingKana else {
-            speakSynthesizedJapanese(text: hiraganaToKatakana(text: expression))
+            speakSynthesizedJapanese(text: hiraganaToKatakana(text: expression), requestID: requestID)
             return
         }
         do {
@@ -328,22 +342,33 @@ public class JapaneseTTS: NSObject, ObservableObject {
                 requestID: requestID
             )
         } catch is CancellationError {
+            finishSpeechRequest(requestID)
             return
         } catch {
             guard !Task.isCancelled, activeSpeechRequestID == requestID else { return }
-            speakSynthesizedJapanese(text: hiraganaToKatakana(text: readingKana))
+            speakSynthesizedJapanese(text: hiraganaToKatakana(text: readingKana), requestID: requestID)
         }
     }
     
     @MainActor
-    private func speakSynthesizedJapanese(text: String) {
-        //        debugPrint("# speakSynthesizedJapanese", text)
+    private func speakSynthesizedJapanese(text: String, requestID: UUID) {
+        guard activeSpeechRequestID == requestID else { return }
+        resetPronunciationPlayback()
+        guard !text.isEmpty, acquireAudioSessionIfNeeded() else {
+            finishSpeechRequest(requestID)
+            return
+        }
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = configuredSynthesizedJapaneseVoice()
         utterance.volume = 0.9
-        //        utterance.rate = 1.3
-        guard acquireAudioSessionIfNeeded() else { return }
-        JapaneseTTS.speechSynth.speak(utterance)
+        activeUtterance = utterance
+        isPlaying = true
+        JapaneseTTS.temporarilyPauseTts()
+        if let synthesizedSpeechStartOverride {
+            synthesizedSpeechStartOverride(utterance)
+        } else {
+            speechSynth.speak(utterance)
+        }
     }
 
     @MainActor
@@ -423,40 +448,64 @@ extension JapaneseTTS {
     
     @MainActor
     private func loadAndPlayAudio(url: URL, readingKana: String, requestID: UUID) {
-        let playerItem = AVPlayerItem(url: url)
-        self.playerItem = playerItem
-        playerItemStatusCancellable = playerItem.publisher(for: \.status).receive(on: RunLoop.main).sink { [weak self] status in
-            Task { @MainActor [weak self] in
-                guard self?.playerItem === playerItem,
-                      self?.activeSpeechRequestID == requestID else { return }
-                switch status {
-                case .readyToPlay:
-                    if self?.shouldPlayOnceReady ?? false {
-                        self?.shouldPlayOnceReady = false
-                        self?.play()
+        guard activeSpeechRequestID == requestID else { return }
+        let item = AVPlayerItem(url: url)
+        playerItem = item
+        shouldPlayOnceReady = true
+        playerItemStatusCancellable = item.publisher(for: \.status)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] status in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.activeSpeechRequestID == requestID,
+                          self.playerItem === item else { return }
+                    switch status {
+                    case .readyToPlay:
+                        guard self.shouldPlayOnceReady else { return }
+                        self.shouldPlayOnceReady = false
+                        guard self.acquireAudioSessionIfNeeded() else {
+                            self.finishSpeechRequest(requestID)
+                            return
+                        }
+                        self.isPlaying = true
+                        JapaneseTTS.temporarilyPauseTts()
+                        item.audioTimePitchAlgorithm = .timeDomain
+                        self.player.play()
+                    case .failed:
+                        self.speakSynthesizedJapanese(
+                            text: self.hiraganaToKatakana(text: readingKana),
+                            requestID: requestID
+                        )
+                    default: break
                     }
-                case .failed:
-                    self?.speakSynthesizedJapanese(text: readingKana)
-                    self?.shouldPlayOnceReady = false
-                default: break
                 }
             }
-        }
-        player.replaceCurrentItem(with: playerItem)
-        play()
-        shouldPlayOnceReady = true
-    }
-    
-    @MainActor
-    private func play() {
-        guard acquireAudioSessionIfNeeded() else {
-            isPlaying = false
-            return
-        }
-        isPlaying = true
-        JapaneseTTS.temporarilyPauseTts()
-        player.currentItem?.audioTimePitchAlgorithm = .timeDomain
-        player.play()
+        NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime, object: item)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.activeSpeechRequestID == requestID,
+                          self.playerItem === item else { return }
+                    self.finishSpeechRequest(requestID)
+                }
+            }
+            .store(in: &playerItemCompletionCancellables)
+        NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime, object: item)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.activeSpeechRequestID == requestID,
+                          self.playerItem === item else { return }
+                    self.speakSynthesizedJapanese(
+                        text: self.hiraganaToKatakana(text: readingKana),
+                        requestID: requestID
+                    )
+                }
+            }
+            .store(in: &playerItemCompletionCancellables)
+        player.replaceCurrentItem(with: item)
     }
 
     @MainActor
@@ -479,44 +528,65 @@ extension JapaneseTTS {
 }
 
 extension JapaneseTTS: AVSpeechSynthesizerDelegate {
+    enum SynthesizedUtteranceEvent {
+        case paused
+        case playing
+        case finished
+    }
+
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didPause utterance: AVSpeechUtterance) {
-        Task { @MainActor in
-            isPlaying = false
-            JapaneseTTS.unpauseTts()
-        }
+        receiveSynthesizedUtteranceEvent(.paused, utterance: utterance)
     }
-    
+
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in
-            releaseAudioSession()
-            isPlaying = false
-            JapaneseTTS.unpauseTts()
-        }
+        receiveSynthesizedUtteranceEvent(.finished, utterance: utterance)
     }
-    
+
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didContinue utterance: AVSpeechUtterance) {
-        Task { @MainActor in
-            isPlaying = true
-        }
+        receiveSynthesizedUtteranceEvent(.playing, utterance: utterance)
     }
-    
+
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
-        Task { @MainActor in
-            isPlaying = true
-        }
+        receiveSynthesizedUtteranceEvent(.playing, utterance: utterance)
     }
-    
+
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in
-            releaseAudioSession()
-            JapaneseTTS.unpauseTts()
-            isPlaying = false
+        receiveSynthesizedUtteranceEvent(.finished, utterance: utterance)
+    }
+
+    public func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        willSpeakRangeOfSpeechString characterRange: NSRange,
+        utterance: AVSpeechUtterance
+    ) {
+        receiveSynthesizedUtteranceEvent(.playing, utterance: utterance)
+    }
+
+    private func receiveSynthesizedUtteranceEvent(
+        _ event: SynthesizedUtteranceEvent,
+        utterance: AVSpeechUtterance
+    ) {
+        Task { @MainActor [weak self] in
+            self?.handleSynthesizedUtteranceEvent(event, utterance: utterance)
         }
     }
-    
-    public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, willSpeakRangeOfSpeechString characterRange: NSRange, utterance: AVSpeechUtterance) {
-        Task { @MainActor in
+
+    @MainActor
+    func handleSynthesizedUtteranceEvent(
+        _ event: SynthesizedUtteranceEvent,
+        utterance: AVSpeechUtterance
+    ) {
+        guard activeUtterance === utterance,
+              let requestID = activeSpeechRequestID else { return }
+        switch event {
+        case .paused:
+            isPlaying = false
+            JapaneseTTS.unpauseTts()
+        case .playing:
             isPlaying = true
+            JapaneseTTS.temporarilyPauseTts()
+        case .finished:
+            finishSpeechRequest(requestID)
         }
     }
 }
