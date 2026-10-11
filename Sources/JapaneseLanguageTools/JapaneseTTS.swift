@@ -10,8 +10,24 @@ struct JapanesePronunciationAudioDownloader {
     var download: (URL) async throws -> URL
 
     static let live = Self { url in
-        let (temporaryURL, _) = try await URLSession.shared.download(from: url)
-        return temporaryURL
+        let (temporaryURL, response) = try await URLSession.shared.download(from: url)
+        do {
+            try Task.checkCancellation()
+            try validate(response: response)
+            return temporaryURL
+        } catch {
+            // URLSession owns these temporary bytes; a failed response must
+            // never become a persistent pronunciation cache entry.
+            try? FileManager.default.removeItem(at: temporaryURL)
+            throw error
+        }
+    }
+
+    static func validate(response: URLResponse) throws {
+        guard let response = response as? HTTPURLResponse,
+              (200...299).contains(response.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
     }
 }
 
