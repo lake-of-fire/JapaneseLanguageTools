@@ -178,6 +178,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
     @MainActor var recordedAudioPlaybackOverride: ((URL, String, @escaping () -> Void, @escaping () -> Void, @escaping () -> Void) -> Void)?
     @MainActor var recordedAudioStartOverride: (() -> Void)?
     @MainActor var synthesizedSpeechStartOverride: ((AVSpeechUtterance) -> Void)?
+    @MainActor var synthesizedSpeechVoiceResolverOverride: (() -> AVSpeechSynthesisVoice?)?
     @MainActor var speechRequestCompletionOverride: (() -> Void)?
 #endif
     
@@ -417,7 +418,15 @@ public class JapaneseTTS: NSObject, ObservableObject {
     @MainActor
     private func configuredSynthesizedJapaneseVoice() -> AVSpeechSynthesisVoice? {
         if !hasResolvedSynthesizedJapaneseVoice {
+#if DEBUG
+            if let synthesizedSpeechVoiceResolverOverride {
+                synthesizedJapaneseVoice = synthesizedSpeechVoiceResolverOverride()
+            } else {
+                synthesizedJapaneseVoice = AVSpeechSynthesisVoice(language: "ja-JP")
+            }
+#else
             synthesizedJapaneseVoice = AVSpeechSynthesisVoice(language: "ja-JP")
+#endif
             hasResolvedSynthesizedJapaneseVoice = true
         }
         return synthesizedJapaneseVoice

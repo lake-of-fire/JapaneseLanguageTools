@@ -42,6 +42,7 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         let cachedURL = try pronunciationCacheURL(expression: expression, reading: reading)
         defer { try? FileManager.default.removeItem(at: cachedURL) }
         let tts = JapaneseTTS()
+        tts.synthesizedSpeechVoiceResolverOverride = { nil }
         var recordedReady: (() -> Void)?
         var recordedFailure: (() -> Void)?
         var synthesizedUtterance: AVSpeechUtterance?
@@ -92,6 +93,7 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         let secondCachedURL = try pronunciationCacheURL(expression: secondExpression, reading: "よみ")
         defer { try? FileManager.default.removeItem(at: secondCachedURL) }
         let tts = JapaneseTTS()
+        tts.synthesizedSpeechVoiceResolverOverride = { nil }
         var resumeFirstDownload: CheckedContinuation<URL, Error>?
         var recordedReady: (() -> Void)?
         var recordedCompletion: (() -> Void)?
@@ -171,6 +173,7 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         configureAudioSessionForTesting()
 
         let tts = JapaneseTTS()
+        tts.synthesizedSpeechVoiceResolverOverride = { nil }
         var utterances = [AVSpeechUtterance]()
         let firstStarted = expectation(description: "first synthesis started")
         let secondStarted = expectation(description: "second synthesis started")
@@ -219,6 +222,7 @@ final class JapaneseLanguageToolsTests: XCTestCase {
             try? FileManager.default.removeItem(at: cached)
         }
         let tts = JapaneseTTS()
+        tts.synthesizedSpeechVoiceResolverOverride = { nil }
         let started = expectation(description: "recorded item loaded")
         var ready: (() -> Void)?
         var finished: (() -> Void)?
@@ -261,6 +265,11 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         }
         ManabiSpokenAudioSession.deactivationOverrideForTesting = { deactivationCount += 1 }
         let tts = JapaneseTTS()
+        var voiceResolutionCount = 0
+        tts.synthesizedSpeechVoiceResolverOverride = {
+            voiceResolutionCount += 1
+            return nil
+        }
         var utterances = [AVSpeechUtterance]()
         tts.synthesizedSpeechStartOverride = { utterances.append($0) }
         let failedRequestFinished = expectation(description: "failed synthesized request finished")
@@ -282,6 +291,8 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertEqual(utterances.count, 1)
         XCTAssertTrue(tts.isPlaying)
         XCTAssertEqual(activationCount, 2)
+        XCTAssertEqual(voiceResolutionCount, 1,
+            "A missing voice is resolved once across failed and recovered speech requests")
         XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 1)
         tts.handleSynthesizedUtteranceEvent(try XCTUnwrap(utterances.last))
         XCTAssertFalse(tts.isPlaying)
@@ -310,6 +321,7 @@ final class JapaneseLanguageToolsTests: XCTestCase {
             try? FileManager.default.removeItem(at: cached)
         }
         let tts = JapaneseTTS()
+        tts.synthesizedSpeechVoiceResolverOverride = { nil }
         var playbackStarts = 0
         var synthesizedStarts = 0
         var downloadCount = 0
