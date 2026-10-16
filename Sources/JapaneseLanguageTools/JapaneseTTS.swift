@@ -24,101 +24,6 @@ struct JapanesePronunciationAudioDownloader {
     }
 }
 
-public enum ManabiSpokenAudioIntent: Equatable, Sendable {
-    case readAloud
-    case recordedAudio
-    case pronunciation
-}
-
-@MainActor
-public final class ManabiSpokenAudioSessionLease {
-    fileprivate let id: UUID
-    public let intent: ManabiSpokenAudioIntent
-    private var isReleased = false
-
-    fileprivate init(id: UUID, intent: ManabiSpokenAudioIntent) {
-        self.id = id
-        self.intent = intent
-    }
-
-    deinit {
-        guard !isReleased else { return }
-        let id = id
-        Task { @MainActor in
-            try? ManabiSpokenAudioSession.release(id: id)
-        }
-    }
-
-    public func release() throws {
-        guard !isReleased else { return }
-        defer { isReleased = true }
-        try ManabiSpokenAudioSession.release(id: id)
-    }
-}
-
-@MainActor
-public enum ManabiSpokenAudioSession {
-    private static var activeLeases: [UUID: ManabiSpokenAudioIntent] = [:]
-
-#if DEBUG
-    static var activationOverrideForTesting: ((ManabiSpokenAudioIntent) throws -> Void)?
-    static var deactivationOverrideForTesting: (() throws -> Void)?
-    static var activeLeaseCountForTesting: Int { activeLeases.count }
-
-    static func resetForTesting() {
-        activeLeases.removeAll()
-        activationOverrideForTesting = nil
-        deactivationOverrideForTesting = nil
-    }
-#endif
-
-    public static func acquire(_ intent: ManabiSpokenAudioIntent) throws -> ManabiSpokenAudioSessionLease {
-        if activeLeases.isEmpty {
-#if DEBUG
-            if let activationOverrideForTesting {
-                try activationOverrideForTesting(intent)
-            } else {
-                try activateAudioSession()
-            }
-#else
-            try activateAudioSession()
-#endif
-        }
-        let lease = ManabiSpokenAudioSessionLease(id: UUID(), intent: intent)
-        activeLeases[lease.id] = intent
-        return lease
-    }
-
-    private static func activateAudioSession() throws {
-#if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio, options: .interruptSpokenAudioAndMixWithOthers)
-        try session.setActive(true)
-#endif
-    }
-
-    fileprivate static func release(id: UUID) throws {
-        guard activeLeases[id] != nil else { return }
-        let wasFinalLease = activeLeases.count == 1
-        activeLeases.removeValue(forKey: id)
-        guard wasFinalLease else { return }
-#if DEBUG
-        if let deactivationOverrideForTesting {
-            try deactivationOverrideForTesting()
-        } else {
-            try deactivateAudioSession()
-        }
-#else
-        try deactivateAudioSession()
-#endif
-    }
-
-    private static func deactivateAudioSession() throws {
-#if os(iOS)
-        try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-#endif
-    }
-}
 
 #if os(iOS)
 @MainActor
@@ -271,7 +176,9 @@ public class JapaneseTTS: NSObject, ObservableObject {
     // exercised without media hardware.
     @MainActor var pronunciationAudioURLResolver = TofuguAudioIndex.audioURL
     @MainActor var recordedAudioPlaybackOverride: ((URL, String, @escaping () -> Void, @escaping () -> Void, @escaping () -> Void) -> Void)?
+    @MainActor var recordedAudioStartOverride: (() -> Void)?
     @MainActor var synthesizedSpeechStartOverride: ((AVSpeechUtterance) -> Void)?
+    @MainActor var synthesizedSpeechVoiceResolverOverride: (() -> AVSpeechSynthesisVoice?)?
     @MainActor var speechRequestCompletionOverride: (() -> Void)?
 #endif
     
@@ -411,9 +318,9 @@ public class JapaneseTTS: NSObject, ObservableObject {
     }
 
     @MainActor
-    private func acquirePronunciationSession() {
+    private func acquirePronunciationSession() throws {
         if pronunciationSessionLease == nil {
-            pronunciationSessionLease = try? ManabiSpokenAudioSession.acquire(.pronunciation)
+            pronunciationSessionLease = try ManabiSpokenAudioSession.acquire(.pronunciation)
         }
     }
 
@@ -489,8 +396,13 @@ public class JapaneseTTS: NSObject, ObservableObject {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = configuredSynthesizedJapaneseVoice()
         utterance.volume = 0.9
+        do {
+            try acquirePronunciationSession()
+        } catch {
+            finishSpeechRequest(requestID)
+            return
+        }
         activeUtterance = utterance
-        acquirePronunciationSession()
         isPlaying = true
 #if DEBUG
         if let synthesizedSpeechStartOverride {
@@ -506,7 +418,15 @@ public class JapaneseTTS: NSObject, ObservableObject {
     @MainActor
     private func configuredSynthesizedJapaneseVoice() -> AVSpeechSynthesisVoice? {
         if !hasResolvedSynthesizedJapaneseVoice {
+#if DEBUG
+            if let synthesizedSpeechVoiceResolverOverride {
+                synthesizedJapaneseVoice = synthesizedSpeechVoiceResolverOverride()
+            } else {
+                synthesizedJapaneseVoice = AVSpeechSynthesisVoice(language: "ja-JP")
+            }
+#else
             synthesizedJapaneseVoice = AVSpeechSynthesisVoice(language: "ja-JP")
+#endif
             hasResolvedSynthesizedJapaneseVoice = true
         }
         return synthesizedJapaneseVoice
@@ -684,7 +604,18 @@ extension JapaneseTTS {
         case .readyToPlay:
             guard shouldPlayOnceReady else { return }
             shouldPlayOnceReady = false
-            acquirePronunciationSession()
+            do {
+                try acquirePronunciationSession()
+            } catch {
+                finishSpeechRequest(requestID)
+                return
+            }
+#if DEBUG
+            if let recordedAudioStartOverride {
+                recordedAudioStartOverride()
+                return
+            }
+#endif
             if let item {
                 item.audioTimePitchAlgorithm = .timeDomain
                 player.play()
