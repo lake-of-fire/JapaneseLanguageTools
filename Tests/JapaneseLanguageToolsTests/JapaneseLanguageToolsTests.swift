@@ -29,6 +29,7 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         ))
     }
 
+#if DEBUG
     @MainActor
     func testFailedRecordedPronunciationEvictsCacheAndFallsBackToSynthesis() async throws {
         ManabiSpokenAudioSession.resetForTesting()
@@ -411,6 +412,7 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         ManabiSpokenAudioSession.activationOverrideForTesting = { _ in }
         ManabiSpokenAudioSession.deactivationOverrideForTesting = {}
     }
+#endif
 
     func testKanaScriptConversionPreservesNoOpInputAndConvertsMatchingScript() {
         XCTAssertEqual("かな漢字".withKatakanaToHiragana, "かな漢字")
