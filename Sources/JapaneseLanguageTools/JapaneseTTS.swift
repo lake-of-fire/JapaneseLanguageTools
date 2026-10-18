@@ -270,6 +270,10 @@ public class JapaneseTTS: NSObject, ObservableObject {
     private var hasResolvedSynthesizedJapaneseVoice = false
 
     var pronunciationAudioDownloader = JapanesePronunciationAudioDownloader.live
+    @MainActor var pronunciationAudioCache = JapanesePronunciationAudioCache.shared
+    @MainActor private var activePronunciationArtifact: (
+        cache: JapanesePronunciationAudioCache, artifact: JapanesePronunciationAudioCache.Artifact
+    )?
     
     enum JapaneseTTSError: Error {
         case audioFileDoesNotExist
@@ -382,6 +386,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
     
     @MainActor
     private func resetPronunciationPlayback() {
+        activePronunciationArtifact = nil
         // Retire callback authority before stopping native playback: stop can enqueue
         // completion callbacks which must not release the next request's lease.
         activeUtterance = nil
@@ -526,34 +531,27 @@ extension JapaneseTTS {
         // From Apple docs: It's strongly recommended to set AVPlayer's property automaticallyWaitsToMinimizeStalling to false. Not doing so can lead to poor startup times for playback and poor recovery from stalls.
         player.automaticallyWaitsToMinimizeStalling = false
         
-        let filename = "\(expression)【\(readingKana)】.mp3"
-        let cacheDirectory = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let audioDirectory = cacheDirectory.appendingPathComponent("audio").appendingPathComponent("tofugu")
-        if (try? !audioDirectory.checkResourceIsReachable()) ?? true {
-            try FileManager.default.createDirectory(at: audioDirectory, withIntermediateDirectories: true, attributes: nil)
-        }
-        let localAudioPath = audioDirectory.appendingPathComponent(filename)
-        
-        if (try? localAudioPath.checkResourceIsReachable()) ?? false {
-            guard activeSpeechRequestID == requestID else { throw CancellationError() }
-            loadAndPlayAudio(url: localAudioPath, readingKana: readingKana, requestID: requestID)
+        let key = try JapanesePronunciationAudioCache.Key(
+            expression: expression, readingKana: readingKana, sourceURL: remoteAudioURL
+        )
+        let cache = pronunciationAudioCache
+        let cachedArtifact = try await cache.cachedArtifact(for: key)
+        try Task.checkCancellation()
+        guard activeSpeechRequestID == requestID else { throw CancellationError() }
+        let artifact: JapanesePronunciationAudioCache.Artifact
+        if let cachedArtifact {
+            artifact = cachedArtifact
         } else {
             let temporaryURL = try await pronunciationAudioDownloader.download(remoteAudioURL)
+            defer { try? FileManager.default.removeItem(at: temporaryURL) }
             try Task.checkCancellation()
             guard activeSpeechRequestID == requestID else { throw CancellationError() }
-            if !FileManager.default.fileExists(atPath: localAudioPath.path) {
-                do {
-                    try FileManager.default.moveItem(at: temporaryURL, to: localAudioPath)
-                } catch {
-                    guard FileManager.default.fileExists(atPath: localAudioPath.path) else {
-                        throw error
-                    }
-                }
-            }
-            try Task.checkCancellation()
-            guard activeSpeechRequestID == requestID else { throw CancellationError() }
-            loadAndPlayAudio(url: localAudioPath, readingKana: readingKana, requestID: requestID)
+            artifact = try await cache.install(from: temporaryURL, for: key)
         }
+        try Task.checkCancellation()
+        guard activeSpeechRequestID == requestID else { throw CancellationError() }
+        activePronunciationArtifact = (cache, artifact)
+        loadAndPlayAudio(url: artifact.url, readingKana: readingKana, requestID: requestID)
     }
     
     @MainActor
@@ -582,6 +580,7 @@ extension JapaneseTTS {
                         item.audioTimePitchAlgorithm = .timeDomain
                         self.player.play()
                     case .failed:
+                        self.evictFailedPronunciationArtifact(url: url)
                         self.speakSynthesizedJapanese(
                             text: self.hiraganaToKatakana(text: readingKana),
                             requestID: requestID
@@ -608,6 +607,7 @@ extension JapaneseTTS {
                     guard let self,
                           self.activeSpeechRequestID == requestID,
                           self.playerItem === item else { return }
+                    self.evictFailedPronunciationArtifact(url: url)
                     self.speakSynthesizedJapanese(
                         text: self.hiraganaToKatakana(text: readingKana),
                         requestID: requestID
@@ -616,6 +616,13 @@ extension JapaneseTTS {
             }
             .store(in: &playerItemCompletionCancellables)
         player.replaceCurrentItem(with: item)
+    }
+
+    @MainActor
+    private func evictFailedPronunciationArtifact(url: URL) {
+        guard let owned = activePronunciationArtifact, owned.artifact.url == url else { return }
+        activePronunciationArtifact = nil
+        Task { try? await owned.cache.evict(owned.artifact) }
     }
 
     @MainActor
