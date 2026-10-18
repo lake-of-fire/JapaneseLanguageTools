@@ -1,33 +1,127 @@
 import SwiftUI
-#if os(iOS)
 import AudioToolbox
+#if os(iOS)
 import UIKit
 #endif
 import Speech
+import AVFoundation
 import Combine
 
 struct JapanesePronunciationAudioDownloader {
+    static let maximumAudioBytes = 4 * 1_024 * 1_024
+    static let maximumAudioDurationSeconds = 60.0
     var download: (URL) async throws -> URL
 
     static let live = Self { url in
-        let (temporaryURL, response) = try await URLSession.shared.download(from: url)
+        guard allows(url: url) else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        request.timeoutInterval = 15
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 30
+        configuration.httpShouldSetCookies = false
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let (bytes, response) = try await session.bytes(
+            for: request, delegate: JapanesePronunciationRedirectPolicy()
+        )
+        defer { bytes.task.cancel() }
+        try validate(response: response)
+        var data = Data()
+        for try await byte in bytes {
+            guard data.count < maximumAudioBytes else { throw URLError(.dataLengthExceedsMaximum) }
+            data.append(byte)
+            if data.count.isMultiple(of: 65_536) { try Task.checkCancellation() }
+        }
+        try Task.checkCancellation()
+        guard !data.isEmpty,
+              response.expectedContentLength < 0 || response.expectedContentLength == Int64(data.count) else {
+            throw URLError(.badServerResponse)
+        }
+        let temporaryURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp3")
         do {
+            try data.write(to: temporaryURL, options: .atomic)
+            try validateAudioFile(at: temporaryURL)
             try Task.checkCancellation()
-            try validate(response: response)
             return temporaryURL
         } catch {
-            // URLSession owns these temporary bytes; a failed response must
-            // never become a persistent pronunciation cache entry.
             try? FileManager.default.removeItem(at: temporaryURL)
             throw error
         }
     }
 
+    static func allows(url: URL) -> Bool {
+        url.scheme?.lowercased() == "https" && url.host?.lowercased() == "manabi.io"
+            && (url.port == nil || url.port == 443) && url.user == nil && url.password == nil
+            && url.path.hasPrefix("/media/audio/tofugu/") && url.pathExtension.lowercased() == "mp3"
+    }
+
     static func validate(response: URLResponse) throws {
-        guard let response = response as? HTTPURLResponse,
-              (200...299).contains(response.statusCode) else {
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200,
+              let finalURL = response.url, allows(url: finalURL),
+              ["audio/mpeg", "audio/mp3"].contains(response.mimeType?.lowercased() ?? ""),
+              response.value(forHTTPHeaderField: "Content-Range") == nil,
+              response.expectedContentLength != 0,
+              response.expectedContentLength <= Int64(maximumAudioBytes) else {
             throw URLError(.badServerResponse)
         }
+        if let declaredLength = response.value(forHTTPHeaderField: "Content-Length") {
+            guard let count = Int64(declaredLength.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  count > 0, count <= Int64(maximumAudioBytes) else {
+                throw URLError(.badServerResponse)
+            }
+        }
+        if let encoding = response.value(forHTTPHeaderField: "Content-Encoding"),
+           encoding.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "identity" {
+            throw URLError(.badServerResponse)
+        }
+    }
+
+    static func validateAudioFile(at url: URL) throws {
+        let attributes = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard attributes.isRegularFile == true, attributes.isSymbolicLink != true,
+              let size = attributes.fileSize, size > 0, size <= maximumAudioBytes else {
+            throw URLError(.badServerResponse)
+        }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let prefix = try handle.read(upToCount: 10) ?? Data()
+        let hasID3Header = prefix.count >= 10 && prefix.starts(with: [0x49, 0x44, 0x33])
+            && (2...4).contains(prefix[3])
+        let hasMPEGFrame = prefix.count >= 4 && prefix[0] == 0xff && prefix[1] & 0xe0 == 0xe0
+        guard hasID3Header || hasMPEGFrame else { throw URLError(.badServerResponse) }
+        let file = try AVAudioFile(forReading: url)
+        let format = file.processingFormat
+        guard file.fileFormat.streamDescription.pointee.mFormatID == kAudioFormatMPEGLayer3,
+              format.sampleRate.isFinite, format.sampleRate > 0, format.sampleRate <= 192_000,
+              (1...2).contains(format.channelCount), file.length > 0,
+              Double(file.length) / format.sampleRate <= maximumAudioDurationSeconds,
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_096) else {
+            throw URLError(.badServerResponse)
+        }
+        var decodedFrames: Int64 = 0
+        while true {
+            try Task.checkCancellation()
+            buffer.frameLength = 0
+            try file.read(into: buffer, frameCount: 4_096)
+            guard buffer.frameLength > 0 else { break }
+            decodedFrames += Int64(buffer.frameLength)
+            guard Double(decodedFrames) / format.sampleRate <= maximumAudioDurationSeconds else {
+                throw URLError(.dataLengthExceedsMaximum)
+            }
+        }
+        guard decodedFrames > 0 else { throw URLError(.badServerResponse) }
+    }
+}
+
+private final class JapanesePronunciationRedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(request.url.map(JapanesePronunciationAudioDownloader.allows(url:)) == true ? request : nil)
     }
 }
 
