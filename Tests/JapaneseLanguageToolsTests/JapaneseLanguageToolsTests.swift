@@ -82,20 +82,30 @@ final class JapaneseLanguageToolsTests: XCTestCase {
     @MainActor
     func testSupersededDownloadAndRecordedCompletionCannotFinishReplacement() async throws {
         ManabiSpokenAudioSession.resetForTesting()
-        defer { ManabiSpokenAudioSession.resetForTesting() }
         configureAudioSessionForTesting()
 
-        let firstExpression = "superseded-download-\(UUID().uuidString)"
-        let firstDownloadedURL = try makeTemporaryAudioFile()
-        defer { try? FileManager.default.removeItem(at: firstDownloadedURL) }
-        let secondExpression = "superseded-player-\(UUID().uuidString)"
-        let secondDownloadedURL = try makeTemporaryAudioFile()
-        defer { try? FileManager.default.removeItem(at: secondDownloadedURL) }
-        let secondCachedURL = try pronunciationCacheURL(expression: secondExpression, reading: "よみ")
-        defer { try? FileManager.default.removeItem(at: secondCachedURL) }
         let tts = JapaneseTTS()
         tts.synthesizedSpeechVoiceResolverOverride = { nil }
-        var resumeFirstDownload: CheckedContinuation<URL, Error>?
+        let firstDownload = PronunciationDownloadGate()
+        addTeardownBlock { @MainActor in
+            tts.speechRequestCompletionOverride = nil
+            ManabiSpokenAudioSession.deactivationOverrideForTesting = {}
+            await firstDownload.track(tts.speechRequestTaskForTesting)
+            tts.cancelSpeechRequestForTesting()
+            await firstDownload.cancelAndJoin()
+            await firstDownload.removeFiles()
+            ManabiSpokenAudioSession.resetForTesting()
+        }
+        let firstExpression = "superseded-download-\(UUID().uuidString)"
+        let firstDownloadedURL = try makeTemporaryAudioFile()
+        await firstDownload.trackFile(firstDownloadedURL)
+        let firstCachedURL = try pronunciationCacheURL(expression: firstExpression, reading: "よみ")
+        await firstDownload.trackFile(firstCachedURL)
+        let secondExpression = "superseded-player-\(UUID().uuidString)"
+        let secondDownloadedURL = try makeTemporaryAudioFile()
+        await firstDownload.trackFile(secondDownloadedURL)
+        let secondCachedURL = try pronunciationCacheURL(expression: secondExpression, reading: "よみ")
+        await firstDownload.trackFile(secondCachedURL)
         var recordedReady: (() -> Void)?
         var recordedCompletion: (() -> Void)?
         var recordedFailure: (() -> Void)?
@@ -109,10 +119,8 @@ final class JapaneseLanguageToolsTests: XCTestCase {
             URL(string: "https://example.com/\(expression).mp3")
         }
         tts.pronunciationAudioDownloader = .init { _ in
-            try await withCheckedThrowingContinuation { continuation in
-                resumeFirstDownload = continuation
-                firstDownloadStarted.fulfill()
-            }
+            firstDownloadStarted.fulfill()
+            return try await firstDownload.value()
         }
         tts.recordedAudioPlaybackOverride = { _, _, ready, finished, failed in
             recordedReady = ready
@@ -130,28 +138,33 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         }
 
         tts.speakJapanese(expression: firstExpression, readingKana: "よみ")
+        await firstDownload.track(tts.speechRequestTaskForTesting)
         await fulfillment(of: [firstDownloadStarted], timeout: 1)
         tts.speakJapanese(expression: "replacement", readingKana: nil)
+        await firstDownload.track(tts.speechRequestTaskForTesting)
         await fulfillment(of: [replacementStarted], timeout: 1)
         let replacementUtterance = try XCTUnwrap(synthesizedUtterances.last)
 
         let supersededDownloadFinished = expectation(description: "superseded download request finished")
         tts.speechRequestCompletionOverride = { supersededDownloadFinished.fulfill() }
-        try XCTUnwrap(resumeFirstDownload).resume(returning: firstDownloadedURL)
+        await firstDownload.resolve(.success(firstDownloadedURL))
         await fulfillment(of: [supersededDownloadFinished], timeout: 1)
         tts.speechRequestCompletionOverride = nil
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstCachedURL.path))
         XCTAssertNil(recordedCompletion)
         XCTAssertTrue(tts.isPlaying)
 
         // Exercise the same request fence after an old player has already started.
         tts.pronunciationAudioDownloader = .init { _ in secondDownloadedURL }
         tts.speakJapanese(expression: secondExpression, readingKana: "よみ")
+        await firstDownload.track(tts.speechRequestTaskForTesting)
         await fulfillment(of: [recordedPlaybackStarted], timeout: 1)
         try XCTUnwrap(recordedReady)()
         XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 1)
         let oldRecordedCompletion = try XCTUnwrap(recordedCompletion)
         let oldRecordedFailure = try XCTUnwrap(recordedFailure)
         tts.speakJapanese(expression: "replacement-again", readingKana: nil)
+        await firstDownload.track(tts.speechRequestTaskForTesting)
         await fulfillment(of: [finalReplacementStarted], timeout: 1)
         let finalUtterance = try XCTUnwrap(synthesizedUtterances.last)
 
@@ -384,6 +397,117 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertFalse(tts.isPlaying)
         XCTAssertEqual(deactivationCount, 1)
         XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 0)
+    }
+
+    #if os(macOS)
+    @MainActor
+    func testCancelledAutomaticPronunciationDoesNotPublishAndAllowsReplacement() async throws {
+        let defaults = UserDefaults.standard
+        let previousEnabled = defaults.object(forKey: "ttsEnabled")
+        let previousPaused = defaults.object(forKey: "ttsTemporarilyPaused")
+        let tts = JapaneseTTS()
+        let download = PronunciationDownloadGate()
+        addTeardownBlock { @MainActor in
+            tts.speechRequestCompletionOverride = nil
+            ManabiSpokenAudioSession.deactivationOverrideForTesting = {}
+            await download.track(tts.speechRequestTaskForTesting)
+            tts.cancelSpeechRequestForTesting()
+            await download.cancelAndJoin()
+            await download.removeFiles()
+            defaults.set(previousEnabled, forKey: "ttsEnabled")
+            defaults.set(previousPaused, forKey: "ttsTemporarilyPaused")
+            ManabiSpokenAudioSession.resetForTesting()
+        }
+        ManabiSpokenAudioSession.resetForTesting()
+        configureAudioSessionForTesting()
+        defaults.set(true, forKey: "ttsEnabled")
+        defaults.set(false, forKey: "ttsTemporarilyPaused")
+
+        let expression = "cancelled-automatic-\(UUID().uuidString)"
+        let temporaryURL = try makeTemporaryAudioFile()
+        await download.trackFile(temporaryURL)
+        let cachedURL = try pronunciationCacheURL(expression: expression, reading: "よみ")
+        await download.trackFile(cachedURL)
+        let started = expectation(description: "automatic pronunciation download started")
+        var recordedStarts = 0
+        var utterances = [AVSpeechUtterance]()
+        tts.pronunciationAudioURLResolver = { _, _ in URL(string: "https://example.com/audio.mp3") }
+        tts.pronunciationAudioDownloader = .init { _ in
+            started.fulfill()
+            return try await download.value()
+        }
+        tts.recordedAudioPlaybackOverride = { _, _, _, _, _ in recordedStarts += 1 }
+        tts.synthesizedSpeechVoiceResolverOverride = { nil }
+        tts.synthesizedSpeechStartOverride = { utterances.append($0) }
+
+        let request = Task { @MainActor in
+            await tts.speakJapaneseIfUnmuted(expression: expression, readingKana: "よみ")
+        }
+        await download.track(request)
+        await fulfillment(of: [started], timeout: 1)
+        request.cancel()
+        await download.resolve(.success(temporaryURL))
+        await request.value
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cachedURL.path))
+        XCTAssertEqual(recordedStarts, 0)
+        XCTAssertTrue(utterances.isEmpty)
+        XCTAssertFalse(tts.isPlaying)
+        XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 0)
+
+        tts.speakJapanese(expression: "よみ")
+        let replacement = try XCTUnwrap(tts.speechRequestTaskForTesting)
+        await download.track(replacement)
+        await replacement.value
+        XCTAssertEqual(utterances.count, 1)
+        XCTAssertTrue(tts.isPlaying)
+        XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 1)
+        tts.handleSynthesizedUtteranceEvent(try XCTUnwrap(utterances.last))
+        XCTAssertFalse(tts.isPlaying)
+        XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 0)
+    }
+    #endif
+
+    private actor PronunciationDownloadGate {
+        private var result: Result<URL, Error>?
+        private var continuations = [CheckedContinuation<URL, Error>]()
+        private var requestTasks = [Task<Void, Never>]()
+        private var cleanupURLs = [URL]()
+
+        func value() async throws -> URL {
+            if let result { return try result.get() }
+            return try await withCheckedThrowingContinuation { continuation in
+                continuations.append(continuation)
+            }
+        }
+
+        func resolve(_ result: Result<URL, Error>) {
+            guard self.result == nil else { return }
+            self.result = result
+            let pending = continuations
+            continuations.removeAll()
+            for continuation in pending { continuation.resume(with: result) }
+        }
+
+        func track(_ task: Task<Void, Never>?) {
+            if let task { requestTasks.append(task) }
+        }
+
+        func trackFile(_ url: URL) {
+            cleanupURLs.append(url)
+        }
+
+        func removeFiles() {
+            for url in cleanupURLs { try? FileManager.default.removeItem(at: url) }
+            cleanupURLs.removeAll()
+        }
+
+        func cancelAndJoin() async {
+            let tasks = requestTasks
+            requestTasks.removeAll()
+            tasks.forEach { $0.cancel() }
+            resolve(.failure(CancellationError()))
+            for task in tasks { await task.value }
+        }
     }
 
     private func makeTemporaryAudioFile() throws -> URL {
