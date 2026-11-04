@@ -37,6 +37,53 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         }
     }
 
+    func testKanjiClassificationAndExtractionAgreeAtUnicodeBlockBoundaries() {
+        // Unicode 17 CJK ideograph blocks: https://www.unicode.org/Public/17.0.0/ucd/Blocks.txt
+        let blocks: [ClosedRange<UInt32>] = [
+            0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF,
+            0x20000...0x2A6DF, 0x2A700...0x2B73F, 0x2B740...0x2B81F,
+            0x2B820...0x2CEAF, 0x2CEB0...0x2EBEF, 0x2EBF0...0x2EE5F,
+            0x2F800...0x2FA1F, 0x30000...0x3134F, 0x31350...0x323AF,
+            0x323B0...0x3347F,
+        ]
+        func check<S: StringProtocol>(_ text: S, expected: Bool) {
+            let diagnostic = Array(text.unicodeScalars).map { String($0.value, radix: 16) }.joined(separator: ",")
+            XCTAssertEqual(text.isKanji, expected, diagnostic)
+            XCTAssertEqual(text.hasKanji, expected, diagnostic)
+            XCTAssertEqual(text.kanjiCount, expected ? 1 : 0, diagnostic)
+            let bytes = expected ? [Array(text.utf8)] : []
+            XCTAssertEqual(text.distinctKanji.map { Array($0.utf8) }, bytes, diagnostic)
+            XCTAssertEqual(text.orderedDistinctKanji.map { Array($0.utf8) }, bytes, diagnostic)
+        }
+        let candidates = Set(blocks.flatMap {
+            [$0.lowerBound - 1, $0.lowerBound, $0.upperBound, $0.upperBound + 1]
+        } + [0x4DFF, 0x2A6FF, 0x2FA3F])
+        for rawValue in candidates.sorted() {
+            let scalar = UnicodeScalar(rawValue)!
+            let text = String(scalar)
+            let expected = blocks.contains { $0.contains(rawValue) }
+            XCTAssertEqual(isJapaneseKanjiScalar(rawValue), expected, text)
+            XCTAssertEqual(isJapaneseKanjiScalar(scalar), expected, text)
+            check(text, expected: expected)
+            check(("A" + text + "Z").dropFirst().dropLast(), expected: expected)
+            for includingKana in [false, true] {
+                for includingNumbers in [false, true] {
+                    XCTAssertEqual(containsCJKCharacters(text: text, includingKana: includingKana,
+                                                       includingNumbers: includingNumbers), expected, text)
+                }
+            }
+            let mixed = "A" + text + "あ" + text + "😀"
+            XCTAssertFalse(mixed.isKanji, text)
+            XCTAssertEqual(mixed.hasKanji, expected, text)
+            XCTAssertEqual(mixed.kanjiCount, expected ? 2 : 0, text)
+            let bytes = expected ? [Array(text.utf8)] : []
+            XCTAssertEqual(mixed.distinctKanji.map { Array($0.utf8) }, bytes, text)
+            XCTAssertEqual(mixed.orderedDistinctKanji.map { Array($0.utf8) }, bytes, text)
+            XCTAssertEqual(containsCJKCharacters(text: mixed, includingKana: false,
+                                               includingNumbers: false), expected, text)
+        }
+    }
+
     func testPronunciationDownloadRejectsHTTPErrorBodies() throws {
         let url = URL(string: "https://example.com/audio.mp3")!
         for status in [200, 206] {
