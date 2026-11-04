@@ -15,6 +15,9 @@ let package = Package(
         .package(url: "https://github.com/lake-of-fire/Mute.git", branch: "master"),
         // SQLiteData 1.9+ and StructuredQueries 0.35+ require iOS 16.
         .package(url: "https://github.com/pointfreeco/sqlite-data.git", exact: "1.8.2"),
+        .package(url: "https://github.com/pointfreeco/swift-sharing", from: "2.10.1"),
+        // Bridge the legacy overlay identity to Sharing's renamed IssueReporting dependency.
+        .package(url: "https://github.com/pointfreeco/xctest-dynamic-overlay", from: "1.13.1"),
         .package(url: "https://github.com/pointfreeco/swift-structured-queries", exact: "0.34.0"),
         .package(url: "https://github.com/swiftlang/swift-syntax", exact: "603.0.1"),
     ],
@@ -24,6 +27,8 @@ let package = Package(
             dependencies: [
                 .product(name: "Mute", package: "Mute"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
+                .product(name: "Sharing", package: "swift-sharing"),
+                .product(name: "IssueReporting", package: "xctest-dynamic-overlay"),
             ],
             resources: [
                 .copy("Resources/tofugu-audio-index.sqlite"),

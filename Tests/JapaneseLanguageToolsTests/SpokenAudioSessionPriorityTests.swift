@@ -134,12 +134,16 @@ final class SpokenAudioSessionPriorityTests: XCTestCase {
             let failedLease = try ManabiSpokenAudioSession.acquire(.readAloud)
             XCTAssertThrowsError(try failedLease.release())
             XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 0)
+            try failedLease.release()
+            XCTAssertEqual(deactivations, 1,
+                "A failed platform release must still consume the lease")
 
             rejectDeactivation = false
             let replacement = try ManabiSpokenAudioSession.acquire(.readAloud)
             XCTAssertEqual(configurations, 2)
             try replacement.release()
             XCTAssertEqual(deactivations, 2)
+            XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 0)
         }
     }
 
@@ -166,8 +170,12 @@ final class SpokenAudioSessionPriorityTests: XCTestCase {
 
             XCTAssertThrowsError(try recordedAudio.release())
             XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 1)
+            try recordedAudio.release()
+            XCTAssertEqual(configurations, [.pronunciation, .recordedAudio, .pronunciation],
+                "Repeating a failed release must not reconfigure a surviving owner")
 
             let secondPronunciation = try ManabiSpokenAudioSession.acquire(.pronunciation)
+            XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 2)
             XCTAssertEqual(
                 configurations,
                 [.pronunciation, .recordedAudio, .pronunciation, .pronunciation]
