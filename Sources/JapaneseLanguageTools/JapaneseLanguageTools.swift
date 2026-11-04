@@ -98,6 +98,9 @@ private func containsCJKScalar(_ scalar: UInt32, includingKana: Bool, includingN
         if scalar >= 0xFF10 && scalar <= 0xFF19 { return true }
     }
 
+    // Compatibility ideographs remain CJK regardless of the kana/digit options.
+    if scalar >= 0xF900 && scalar <= 0xFAFF { return true }
+    if scalar >= 0x2F800 && scalar <= 0x2FA1F { return true }
     return false
 }
 
