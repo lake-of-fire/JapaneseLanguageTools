@@ -180,6 +180,14 @@ public class JapaneseTTS: NSObject, ObservableObject {
     @MainActor var synthesizedSpeechStartOverride: ((AVSpeechUtterance) -> Void)?
     @MainActor var synthesizedSpeechVoiceResolverOverride: (() -> AVSpeechSynthesisVoice?)?
     @MainActor var speechRequestCompletionOverride: (() -> Void)?
+    @MainActor var speechRequestTaskForTesting: Task<Void, Never>? { speechRequestTask }
+    @MainActor func cancelSpeechRequestForTesting() {
+        speechRequestTask?.cancel()
+        speechRequestTask = nil
+        if let requestID = activeSpeechRequestID {
+            finishSpeechRequest(requestID)
+        }
+    }
 #endif
     
     enum JapaneseTTSError: Error {

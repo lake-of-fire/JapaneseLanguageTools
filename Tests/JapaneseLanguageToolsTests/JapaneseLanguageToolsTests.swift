@@ -14,6 +14,76 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         }
     }
 
+    func testContainsCJKCharactersRecognizesCompatibilityIdeographsAcrossOptions() {
+        let cases = [
+            ("﨑", true, false, false), ("丽", true, false, false), ("丸", true, false, false),
+            ("A﨑B", true, false, false), ("😀丽", true, false, false),
+            ("猫", true, false, false), ("𠀀", true, false, false),
+            ("あ", false, true, false), ("ア", false, true, false), ("ｱ", false, true, false),
+            ("7", false, false, true), ("７", false, false, true),
+            ("", false, false, false), ("A", false, false, false), ("😀", false, false, false),
+        ]
+        for (text, hasCJK, hasKana, hasNumber) in cases {
+            for includingKana in [false, true] {
+                for includingNumbers in [false, true] {
+                    XCTAssertEqual(
+                        containsCJKCharacters(text: text, includingKana: includingKana,
+                                              includingNumbers: includingNumbers),
+                        hasCJK || (includingKana && hasKana) || (includingNumbers && hasNumber),
+                        "\(text), kana=\(includingKana), numbers=\(includingNumbers)"
+                    )
+                }
+            }
+        }
+    }
+
+    func testKanjiClassificationAndExtractionAgreeAtUnicodeBlockBoundaries() {
+        // Unicode 17 CJK ideograph blocks: https://www.unicode.org/Public/17.0.0/ucd/Blocks.txt
+        let blocks: [ClosedRange<UInt32>] = [
+            0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF,
+            0x20000...0x2A6DF, 0x2A700...0x2B73F, 0x2B740...0x2B81F,
+            0x2B820...0x2CEAF, 0x2CEB0...0x2EBEF, 0x2EBF0...0x2EE5F,
+            0x2F800...0x2FA1F, 0x30000...0x3134F, 0x31350...0x323AF,
+            0x323B0...0x3347F,
+        ]
+        func check<S: StringProtocol>(_ text: S, expected: Bool) {
+            let diagnostic = Array(text.unicodeScalars).map { String($0.value, radix: 16) }.joined(separator: ",")
+            XCTAssertEqual(text.isKanji, expected, diagnostic)
+            XCTAssertEqual(text.hasKanji, expected, diagnostic)
+            XCTAssertEqual(text.kanjiCount, expected ? 1 : 0, diagnostic)
+            let bytes = expected ? [Array(text.utf8)] : []
+            XCTAssertEqual(text.distinctKanji.map { Array($0.utf8) }, bytes, diagnostic)
+            XCTAssertEqual(text.orderedDistinctKanji.map { Array($0.utf8) }, bytes, diagnostic)
+        }
+        let candidates = Set(blocks.flatMap {
+            [$0.lowerBound - 1, $0.lowerBound, $0.upperBound, $0.upperBound + 1]
+        } + [0x4DFF, 0x2A6FF, 0x2FA3F])
+        for rawValue in candidates.sorted() {
+            let scalar = UnicodeScalar(rawValue)!
+            let text = String(scalar)
+            let expected = blocks.contains { $0.contains(rawValue) }
+            XCTAssertEqual(isJapaneseKanjiScalar(rawValue), expected, text)
+            XCTAssertEqual(isJapaneseKanjiScalar(scalar), expected, text)
+            check(text, expected: expected)
+            check(("A" + text + "Z").dropFirst().dropLast(), expected: expected)
+            for includingKana in [false, true] {
+                for includingNumbers in [false, true] {
+                    XCTAssertEqual(containsCJKCharacters(text: text, includingKana: includingKana,
+                                                       includingNumbers: includingNumbers), expected, text)
+                }
+            }
+            let mixed = "A" + text + "あ" + text + "😀"
+            XCTAssertFalse(mixed.isKanji, text)
+            XCTAssertEqual(mixed.hasKanji, expected, text)
+            XCTAssertEqual(mixed.kanjiCount, expected ? 2 : 0, text)
+            let bytes = expected ? [Array(text.utf8)] : []
+            XCTAssertEqual(mixed.distinctKanji.map { Array($0.utf8) }, bytes, text)
+            XCTAssertEqual(mixed.orderedDistinctKanji.map { Array($0.utf8) }, bytes, text)
+            XCTAssertEqual(containsCJKCharacters(text: mixed, includingKana: false,
+                                               includingNumbers: false), expected, text)
+        }
+    }
+
     func testPronunciationDownloadRejectsHTTPErrorBodies() throws {
         let url = URL(string: "https://example.com/audio.mp3")!
         for status in [200, 206] {
@@ -82,20 +152,30 @@ final class JapaneseLanguageToolsTests: XCTestCase {
     @MainActor
     func testSupersededDownloadAndRecordedCompletionCannotFinishReplacement() async throws {
         ManabiSpokenAudioSession.resetForTesting()
-        defer { ManabiSpokenAudioSession.resetForTesting() }
         configureAudioSessionForTesting()
 
-        let firstExpression = "superseded-download-\(UUID().uuidString)"
-        let firstDownloadedURL = try makeTemporaryAudioFile()
-        defer { try? FileManager.default.removeItem(at: firstDownloadedURL) }
-        let secondExpression = "superseded-player-\(UUID().uuidString)"
-        let secondDownloadedURL = try makeTemporaryAudioFile()
-        defer { try? FileManager.default.removeItem(at: secondDownloadedURL) }
-        let secondCachedURL = try pronunciationCacheURL(expression: secondExpression, reading: "よみ")
-        defer { try? FileManager.default.removeItem(at: secondCachedURL) }
         let tts = JapaneseTTS()
         tts.synthesizedSpeechVoiceResolverOverride = { nil }
-        var resumeFirstDownload: CheckedContinuation<URL, Error>?
+        let firstDownload = PronunciationDownloadGate()
+        addTeardownBlock { @MainActor in
+            tts.speechRequestCompletionOverride = nil
+            ManabiSpokenAudioSession.deactivationOverrideForTesting = {}
+            await firstDownload.track(tts.speechRequestTaskForTesting)
+            tts.cancelSpeechRequestForTesting()
+            await firstDownload.cancelAndJoin()
+            await firstDownload.removeFiles()
+            ManabiSpokenAudioSession.resetForTesting()
+        }
+        let firstExpression = "superseded-download-\(UUID().uuidString)"
+        let firstDownloadedURL = try makeTemporaryAudioFile()
+        await firstDownload.trackFile(firstDownloadedURL)
+        let firstCachedURL = try pronunciationCacheURL(expression: firstExpression, reading: "よみ")
+        await firstDownload.trackFile(firstCachedURL)
+        let secondExpression = "superseded-player-\(UUID().uuidString)"
+        let secondDownloadedURL = try makeTemporaryAudioFile()
+        await firstDownload.trackFile(secondDownloadedURL)
+        let secondCachedURL = try pronunciationCacheURL(expression: secondExpression, reading: "よみ")
+        await firstDownload.trackFile(secondCachedURL)
         var recordedReady: (() -> Void)?
         var recordedCompletion: (() -> Void)?
         var recordedFailure: (() -> Void)?
@@ -109,10 +189,8 @@ final class JapaneseLanguageToolsTests: XCTestCase {
             URL(string: "https://example.com/\(expression).mp3")
         }
         tts.pronunciationAudioDownloader = .init { _ in
-            try await withCheckedThrowingContinuation { continuation in
-                resumeFirstDownload = continuation
-                firstDownloadStarted.fulfill()
-            }
+            firstDownloadStarted.fulfill()
+            return try await firstDownload.value()
         }
         tts.recordedAudioPlaybackOverride = { _, _, ready, finished, failed in
             recordedReady = ready
@@ -130,28 +208,33 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         }
 
         tts.speakJapanese(expression: firstExpression, readingKana: "よみ")
+        await firstDownload.track(tts.speechRequestTaskForTesting)
         await fulfillment(of: [firstDownloadStarted], timeout: 1)
         tts.speakJapanese(expression: "replacement", readingKana: nil)
+        await firstDownload.track(tts.speechRequestTaskForTesting)
         await fulfillment(of: [replacementStarted], timeout: 1)
         let replacementUtterance = try XCTUnwrap(synthesizedUtterances.last)
 
         let supersededDownloadFinished = expectation(description: "superseded download request finished")
         tts.speechRequestCompletionOverride = { supersededDownloadFinished.fulfill() }
-        try XCTUnwrap(resumeFirstDownload).resume(returning: firstDownloadedURL)
+        await firstDownload.resolve(.success(firstDownloadedURL))
         await fulfillment(of: [supersededDownloadFinished], timeout: 1)
         tts.speechRequestCompletionOverride = nil
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstCachedURL.path))
         XCTAssertNil(recordedCompletion)
         XCTAssertTrue(tts.isPlaying)
 
         // Exercise the same request fence after an old player has already started.
         tts.pronunciationAudioDownloader = .init { _ in secondDownloadedURL }
         tts.speakJapanese(expression: secondExpression, readingKana: "よみ")
+        await firstDownload.track(tts.speechRequestTaskForTesting)
         await fulfillment(of: [recordedPlaybackStarted], timeout: 1)
         try XCTUnwrap(recordedReady)()
         XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 1)
         let oldRecordedCompletion = try XCTUnwrap(recordedCompletion)
         let oldRecordedFailure = try XCTUnwrap(recordedFailure)
         tts.speakJapanese(expression: "replacement-again", readingKana: nil)
+        await firstDownload.track(tts.speechRequestTaskForTesting)
         await fulfillment(of: [finalReplacementStarted], timeout: 1)
         let finalUtterance = try XCTUnwrap(synthesizedUtterances.last)
 
@@ -384,6 +467,117 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertFalse(tts.isPlaying)
         XCTAssertEqual(deactivationCount, 1)
         XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 0)
+    }
+
+    #if os(macOS)
+    @MainActor
+    func testCancelledAutomaticPronunciationDoesNotPublishAndAllowsReplacement() async throws {
+        let defaults = UserDefaults.standard
+        let previousEnabled = defaults.object(forKey: "ttsEnabled")
+        let previousPaused = defaults.object(forKey: "ttsTemporarilyPaused")
+        let tts = JapaneseTTS()
+        let download = PronunciationDownloadGate()
+        addTeardownBlock { @MainActor in
+            tts.speechRequestCompletionOverride = nil
+            ManabiSpokenAudioSession.deactivationOverrideForTesting = {}
+            await download.track(tts.speechRequestTaskForTesting)
+            tts.cancelSpeechRequestForTesting()
+            await download.cancelAndJoin()
+            await download.removeFiles()
+            defaults.set(previousEnabled, forKey: "ttsEnabled")
+            defaults.set(previousPaused, forKey: "ttsTemporarilyPaused")
+            ManabiSpokenAudioSession.resetForTesting()
+        }
+        ManabiSpokenAudioSession.resetForTesting()
+        configureAudioSessionForTesting()
+        defaults.set(true, forKey: "ttsEnabled")
+        defaults.set(false, forKey: "ttsTemporarilyPaused")
+
+        let expression = "cancelled-automatic-\(UUID().uuidString)"
+        let temporaryURL = try makeTemporaryAudioFile()
+        await download.trackFile(temporaryURL)
+        let cachedURL = try pronunciationCacheURL(expression: expression, reading: "よみ")
+        await download.trackFile(cachedURL)
+        let started = expectation(description: "automatic pronunciation download started")
+        var recordedStarts = 0
+        var utterances = [AVSpeechUtterance]()
+        tts.pronunciationAudioURLResolver = { _, _ in URL(string: "https://example.com/audio.mp3") }
+        tts.pronunciationAudioDownloader = .init { _ in
+            started.fulfill()
+            return try await download.value()
+        }
+        tts.recordedAudioPlaybackOverride = { _, _, _, _, _ in recordedStarts += 1 }
+        tts.synthesizedSpeechVoiceResolverOverride = { nil }
+        tts.synthesizedSpeechStartOverride = { utterances.append($0) }
+
+        let request = Task { @MainActor in
+            await tts.speakJapaneseIfUnmuted(expression: expression, readingKana: "よみ")
+        }
+        await download.track(request)
+        await fulfillment(of: [started], timeout: 1)
+        request.cancel()
+        await download.resolve(.success(temporaryURL))
+        await request.value
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cachedURL.path))
+        XCTAssertEqual(recordedStarts, 0)
+        XCTAssertTrue(utterances.isEmpty)
+        XCTAssertFalse(tts.isPlaying)
+        XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 0)
+
+        tts.speakJapanese(expression: "よみ")
+        let replacement = try XCTUnwrap(tts.speechRequestTaskForTesting)
+        await download.track(replacement)
+        await replacement.value
+        XCTAssertEqual(utterances.count, 1)
+        XCTAssertTrue(tts.isPlaying)
+        XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 1)
+        tts.handleSynthesizedUtteranceEvent(try XCTUnwrap(utterances.last))
+        XCTAssertFalse(tts.isPlaying)
+        XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 0)
+    }
+    #endif
+
+    private actor PronunciationDownloadGate {
+        private var result: Result<URL, Error>?
+        private var continuations = [CheckedContinuation<URL, Error>]()
+        private var requestTasks = [Task<Void, Never>]()
+        private var cleanupURLs = [URL]()
+
+        func value() async throws -> URL {
+            if let result { return try result.get() }
+            return try await withCheckedThrowingContinuation { continuation in
+                continuations.append(continuation)
+            }
+        }
+
+        func resolve(_ result: Result<URL, Error>) {
+            guard self.result == nil else { return }
+            self.result = result
+            let pending = continuations
+            continuations.removeAll()
+            for continuation in pending { continuation.resume(with: result) }
+        }
+
+        func track(_ task: Task<Void, Never>?) {
+            if let task { requestTasks.append(task) }
+        }
+
+        func trackFile(_ url: URL) {
+            cleanupURLs.append(url)
+        }
+
+        func removeFiles() {
+            for url in cleanupURLs { try? FileManager.default.removeItem(at: url) }
+            cleanupURLs.removeAll()
+        }
+
+        func cancelAndJoin() async {
+            let tasks = requestTasks
+            requestTasks.removeAll()
+            tasks.forEach { $0.cancel() }
+            resolve(.failure(CancellationError()))
+            for task in tasks { await task.value }
+        }
     }
 
     private func makeTemporaryAudioFile() throws -> URL {
