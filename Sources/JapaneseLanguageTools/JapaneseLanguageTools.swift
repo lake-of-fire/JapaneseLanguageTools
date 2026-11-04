@@ -83,10 +83,7 @@ private func containsCJKCharactersUTF8Buffer(
 
 @inline(__always)
 private func containsCJKScalar(_ scalar: UInt32, includingKana: Bool, includingNumbers: Bool) -> Bool {
-    if scalar >= 0x4E00 && scalar <= 0x9FFF { return true }
-    if scalar >= 0x3400 && scalar <= 0x4DBF { return true }
-    if scalar >= 0x20000 && scalar <= 0x2A6DF { return true }
-    if scalar >= 0x2A700 && scalar <= 0x2B73F { return true }
+    if isJapaneseKanjiScalar(scalar) { return true }
 
     if includingKana {
         if scalar >= 0x3040 && scalar <= 0x309F { return true }
@@ -98,9 +95,6 @@ private func containsCJKScalar(_ scalar: UInt32, includingKana: Bool, includingN
         if scalar >= 0xFF10 && scalar <= 0xFF19 { return true }
     }
 
-    // Compatibility ideographs remain CJK regardless of the kana/digit options.
-    if scalar >= 0xF900 && scalar <= 0xFAFF { return true }
-    if scalar >= 0x2F800 && scalar <= 0x2FA1F { return true }
     return false
 }
 
