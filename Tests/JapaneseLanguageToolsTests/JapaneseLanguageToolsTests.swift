@@ -14,6 +14,29 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         }
     }
 
+    func testContainsCJKCharactersRecognizesCompatibilityIdeographsAcrossOptions() {
+        let cases = [
+            ("﨑", true, false, false), ("丽", true, false, false), ("丸", true, false, false),
+            ("A﨑B", true, false, false), ("😀丽", true, false, false),
+            ("猫", true, false, false), ("𠀀", true, false, false),
+            ("あ", false, true, false), ("ア", false, true, false), ("ｱ", false, true, false),
+            ("7", false, false, true), ("７", false, false, true),
+            ("", false, false, false), ("A", false, false, false), ("😀", false, false, false),
+        ]
+        for (text, hasCJK, hasKana, hasNumber) in cases {
+            for includingKana in [false, true] {
+                for includingNumbers in [false, true] {
+                    XCTAssertEqual(
+                        containsCJKCharacters(text: text, includingKana: includingKana,
+                                              includingNumbers: includingNumbers),
+                        hasCJK || (includingKana && hasKana) || (includingNumbers && hasNumber),
+                        "\(text), kana=\(includingKana), numbers=\(includingNumbers)"
+                    )
+                }
+            }
+        }
+    }
+
     func testPronunciationDownloadRejectsHTTPErrorBodies() throws {
         let url = URL(string: "https://example.com/audio.mp3")!
         for status in [200, 206] {
