@@ -28,17 +28,6 @@ private enum UnicodeScalarConstants {
 
     static let kanaShift: UInt32 = 0x60
 
-    static let kanjiCommonStart: UInt32 = 0x4E00
-    static let kanjiCommonEnd: UInt32 = 0x9FFF
-    static let kanjiExtensionAStart: UInt32 = 0x3400
-    static let kanjiExtensionAEnd: UInt32 = 0x4DFF
-    static let kanjiExtensionBStart: UInt32 = 0x20000
-    static let kanjiExtensionBEnd: UInt32 = 0x2A6DF
-    static let kanjiCompatibilityStart: UInt32 = 0xF900
-    static let kanjiCompatibilityEnd: UInt32 = 0xFAFF
-    static let kanjiCompatibilitySupplementStart: UInt32 = 0x2F800
-    static let kanjiCompatibilitySupplementEnd: UInt32 = 0x2FA1F
-
     static let fullWidthDigitZero: UInt32 = 0xFF10
     static let fullWidthDigitNine: UInt32 = 0xFF19
 
@@ -73,21 +62,9 @@ private enum UTF8Constants {
 
     static let kanjiThreeByteLeadMin: UInt8 = 0xE3
     static let kanjiThreeByteLeadMax: UInt8 = 0xEF
-    static let kanjiExtensionAFirstLead: UInt8 = 0xE3
-    static let kanjiExtensionAFirstContinuationMin: UInt8 = 0x90
-    static let kanjiCommonLeadMin: UInt8 = 0xE4
     static let kanjiCommonLeadMax: UInt8 = 0xE9
     static let kanjiCompatibilityLead: UInt8 = 0xEF
-    static let kanjiCompatibilityContinuationMin: UInt8 = 0xA4
-    static let kanjiCompatibilityContinuationMax: UInt8 = 0xAB
     static let kanjiFourByteLead: UInt8 = 0xF0
-    static let kanjiExtensionBContinuationMin: UInt8 = 0xA0
-    static let kanjiExtensionBContinuationMax: UInt8 = 0xA9
-    static let kanjiExtensionBLastContinuation: UInt8 = 0xAA
-    static let kanjiExtensionBLastThirdByteMax: UInt8 = 0x9B
-    static let kanjiCompatibilitySupplementContinuation: UInt8 = 0xAF
-    static let kanjiCompatibilitySupplementThirdByteMin: UInt8 = 0xA0
-    static let kanjiCompatibilitySupplementThirdByteMax: UInt8 = 0xA8
 
     static let byteMask: UInt32 = 0xFF
 
@@ -357,29 +334,6 @@ public extension StringProtocol where Self: RangeReplaceableCollection {
     }
 }
 
-// CJK Unified Ideographs                   4E00-9FFF   Common
-//                                          19968-40959
-// CJK Unified Ideographs Extension A       3400-4DFF   Rare
-//                                          13312-19967
-// CJK Unified Ideographs Extension B       20000-2A6DF Rare, historic
-//                                          131072-173791
-// CJK Compatibility Ideographs             F900-FAFF   Duplicates, unifiable variants, corporate characters
-//                                          63744-64255
-// CJK Compatibility Ideographs Supplement  2F800-2FA1F Unifiable variants
-//                                          194560-195103
-fileprivate let kanjiRanges: [ClosedRange<UInt32>] = [
-    UnicodeScalarConstants.kanjiCommonStart...UnicodeScalarConstants.kanjiCommonEnd,
-    UnicodeScalarConstants.kanjiExtensionAStart...UnicodeScalarConstants.kanjiExtensionAEnd,
-    UnicodeScalarConstants.kanjiExtensionBStart...UnicodeScalarConstants.kanjiExtensionBEnd,
-    UnicodeScalarConstants.kanjiCompatibilityStart...UnicodeScalarConstants.kanjiCompatibilityEnd,
-    UnicodeScalarConstants.kanjiCompatibilitySupplementStart...UnicodeScalarConstants.kanjiCompatibilitySupplementEnd
-]
-
-@inline(__always)
-private func isJapaneseKanjiScalarValue(_ scalar: UInt32) -> Bool {
-    kanjiRanges.contains { $0.contains(scalar) }
-}
-
 @inline(__always)
 private func mayContainKanjiUTF8(_ buffer: UnsafeBufferPointer<UInt8>) -> Bool {
     for byte in buffer {
@@ -418,13 +372,10 @@ private func kanjiBytes(in buffer: UnsafeBufferPointer<UInt8>, at index: Int) ->
         let byte2 = buffer[index + 2]
         guard isContinuationByte(byte1), isContinuationByte(byte2) else { return nil }
 
-        // 3400-4DFF, 4E00-9FFF, F900-FAFF.
-        if (byte0 == UTF8Constants.kanjiExtensionAFirstLead
-                && byte1 >= UTF8Constants.kanjiExtensionAFirstContinuationMin)
-            || (byte0 >= UTF8Constants.kanjiCommonLeadMin && byte0 <= UTF8Constants.kanjiCommonLeadMax)
-            || (byte0 == UTF8Constants.kanjiCompatibilityLead
-                && byte1 >= UTF8Constants.kanjiCompatibilityContinuationMin
-                && byte1 <= UTF8Constants.kanjiCompatibilityContinuationMax) {
+        let scalar = (UInt32(byte0 & UTF8Constants.threeByteLeadMask) << 12)
+            | (UInt32(byte1 & UTF8Constants.sixBitMask) << 6)
+            | UInt32(byte2 & UTF8Constants.sixBitMask)
+        if isJapaneseKanjiScalar(scalar) {
             return UTF8KanjiBytes(packedBytes: packedUTF8Bytes(byte0, byte1, byte2), length: 3)
         }
         return nil
@@ -437,14 +388,11 @@ private func kanjiBytes(in buffer: UnsafeBufferPointer<UInt8>, at index: Int) ->
         let byte3 = buffer[index + 3]
         guard isContinuationByte(byte1), isContinuationByte(byte2), isContinuationByte(byte3) else { return nil }
 
-        // 20000-2A6DF and 2F800-2FA1F.
-        if (byte1 >= UTF8Constants.kanjiExtensionBContinuationMin
-                && byte1 <= UTF8Constants.kanjiExtensionBContinuationMax)
-            || (byte1 == UTF8Constants.kanjiExtensionBLastContinuation
-                && byte2 <= UTF8Constants.kanjiExtensionBLastThirdByteMax)
-            || (byte1 == UTF8Constants.kanjiCompatibilitySupplementContinuation
-                && byte2 >= UTF8Constants.kanjiCompatibilitySupplementThirdByteMin
-                && byte2 <= UTF8Constants.kanjiCompatibilitySupplementThirdByteMax) {
+        let scalar = (UInt32(byte0 & UTF8Constants.fourByteLeadMask) << 18)
+            | (UInt32(byte1 & UTF8Constants.sixBitMask) << 12)
+            | (UInt32(byte2 & UTF8Constants.sixBitMask) << 6)
+            | UInt32(byte3 & UTF8Constants.sixBitMask)
+        if isJapaneseKanjiScalar(scalar) {
             return UTF8KanjiBytes(packedBytes: packedUTF8Bytes(byte0, byte1, byte2, byte3), length: 4)
         }
     }
@@ -469,11 +417,23 @@ private func string(fromKanjiBytes bytes: UTF8KanjiBytes) -> String {
     ], as: UTF8.self)
 }
 
+/// Unicode 17 CJK ideograph blocks, shared by scalar, UTF-8 and ruby callers.
+/// https://www.unicode.org/Public/17.0.0/ucd/Blocks.txt
+@inlinable
 @inline(__always)
 public func isJapaneseKanjiScalar(_ scalar: UInt32) -> Bool {
-    isJapaneseKanjiScalarValue(scalar)
+    switch scalar {
+    case 0x4E00...0x9FFF, 0x3400...0x4DBF, 0x20000...0x2A6DF,
+         0x2A700...0x2EE5F, // Adjacent extensions C, D, E, F, I
+         0x30000...0x3347F, // Adjacent extensions G, H, J
+         0xF900...0xFAFF, 0x2F800...0x2FA1F:
+        return true
+    default:
+        return false
+    }
 }
 
+@inlinable
 @inline(__always)
 public func isJapaneseKanjiScalar(_ scalar: UnicodeScalar) -> Bool {
     isJapaneseKanjiScalar(scalar.value)
