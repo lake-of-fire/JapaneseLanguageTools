@@ -1,11 +1,11 @@
 // swift-tools-version: 5.9
-// The swift-tools-version declares the minimum version of Swift required to build this package.
+// Manifest API baseline. The resolved dependency graph requires Swift 6.4 or later.
 
 import PackageDescription
 
 let package = Package(
     name: "JapaneseLanguageTools",
-    platforms: [.macOS("15.0"), .iOS(.v15), .watchOS(.v4)],
+    platforms: [.macOS("15.0"), .iOS(.v15), .watchOS(.v9)],
     products: [
         .library(
             name: "JapaneseLanguageTools",
