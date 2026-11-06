@@ -3,6 +3,44 @@ import AVFoundation
 @testable import JapaneseLanguageTools
 
 final class JapaneseLanguageToolsTests: XCTestCase {
+    func testTofuguAudioIndexMatchesCanonicalTermAndReadingVariants() throws {
+        let recordings = [
+            (term: "ご飯", reading: "ごはん", filename: "こ\u{3099}飯【こ\u{3099}はん】.mp3"),
+            (term: "飛ぶ", reading: "とぶ", filename: "飛ふ\u{3099}【とふ\u{3099}】.mp3")
+        ]
+        for recording in recordings {
+            for term in [recording.term.precomposedStringWithCanonicalMapping,
+                         recording.term.decomposedStringWithCanonicalMapping] {
+                for reading in [recording.reading.precomposedStringWithCanonicalMapping,
+                                recording.reading.decomposedStringWithCanonicalMapping] {
+                    let url = try XCTUnwrap(TofuguAudioIndex.audioURL(term: term, readingKana: reading))
+                    XCTAssertEqual(url.scheme, "https")
+                    XCTAssertEqual(url.host, "manabi.io")
+                    // Check bytes: String equality alone accepts either normalization.
+                    XCTAssertEqual(Array(url.lastPathComponent.utf8), Array(recording.filename.utf8))
+                }
+            }
+        }
+    }
+
+    func testTofuguAudioIndexRetainsSingleAndMultipleReadings() throws {
+        for (term, reading, filename) in [
+            ("一", "いち", "一【いち】.mp3"),
+            ("五", "ご", "五【こ\u{3099}】.mp3"),
+            ("人", "にん", "人【にん】.mp3"),
+            ("人", "ひと", "人【ひと】.mp3")
+        ] {
+            let url = try XCTUnwrap(TofuguAudioIndex.audioURL(term: term, readingKana: reading))
+            XCTAssertEqual(Array(url.lastPathComponent.utf8), Array(filename.utf8))
+        }
+    }
+
+    func testTofuguAudioIndexRejectsUnknownTermsAndMismatchedReadings() {
+        XCTAssertNil(TofuguAudioIndex.audioURL(term: "ご飯", readingKana: "めし"))
+        XCTAssertNil(TofuguAudioIndex.audioURL(term: "人", readingKana: "じん"))
+        XCTAssertNil(TofuguAudioIndex.audioURL(term: "not-an-indexed-term", readingKana: "いち"))
+    }
+
     func testDigitsOnlyIsConsistentAcrossStringProtocolDispatch() {
         func generic<S: StringProtocol>(_ value: S) -> Bool {
             value.isASCIIOrFullWidthDigitsOnly
@@ -748,6 +786,41 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertEqual("あっ".withKanaToRomaji, "axtu")
     }
     
+    func testRomajiSyllabicNPreservesFollowingNMora() {
+        for (romaji, kana) in [
+            ("nna", "んな"), ("nni", "んに"), ("nnu", "んぬ"),
+            ("nne", "んね"), ("nno", "んの"),
+            ("nnya", "んにゃ"), ("nnyi", "んにぃ"), ("nnyu", "んにゅ"),
+            ("nnye", "んにぇ"), ("nnyo", "んにょ"),
+            ("kanni", "かんに"), ("konnichiha", "こんにちは"),
+            ("annai", "あんない"), ("konnyaku", "こんにゃく"),
+            ("onna", "おんな"), ("shinnyuu", "しんにゅう"),
+            ("NNA", "んな"), ("nnYA", "んにゃ")
+        ] {
+            XCTAssertEqual(romaji.withRomajiToHiragana, kana, romaji)
+        }
+    }
+
+    func testRomajiSyllabicNPreservesBoundariesAndSokuon() {
+        for (romaji, kana) in [
+            ("n", "ん"), ("nn", "ん"), ("n'", "ん"),
+            ("n'a", "んあ"), ("n'ya", "んや"),
+            ("kanpai", "かんぱい"), ("kan.", "かん。"), ("nn!", "ん！"),
+            ("nny", "んy"),
+            ("kappa", "かっぱ"), ("gakkou", "がっこう"),
+            ("kitte", "きって"), ("massugu", "まっすぐ")
+        ] {
+            XCTAssertEqual(romaji.withRomajiToHiragana, kana, romaji)
+        }
+    }
+
+    func testKanaRomajiRoundTripsBeforeNMorae() {
+        for kana in ["かんに", "こんにちは", "あんない", "こんにゃく", "おんな", "しんにゅう"] {
+            XCTAssertEqual(kana.withKanaToRomaji.withRomajiToHiragana, kana)
+            XCTAssertEqual(kana.withKanaToBeginnerHepburnRomaji.withRomajiToHiragana, kana)
+        }
+    }
+
     func testRoundTripWithRomajiToHiragana() {
         // These should round-trip under the same scheme used by the forward mapper.
         let romajiSamples = [
