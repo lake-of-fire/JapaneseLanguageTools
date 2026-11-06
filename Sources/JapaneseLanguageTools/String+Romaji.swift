@@ -138,7 +138,7 @@ public extension String {
             let strL = String(str[str.startIndex ..< str.index(str.startIndex, offsetBy: n)])
             let strC = String(str[str.index(str.startIndex, offsetBy: n) ..< str.index(str.startIndex, offsetBy: n + 2)])
             let strR = String(str[str.index(str.startIndex, offsetBy: n + 2) ..< str.endIndex])
-            str = strL + Self.nCheck(strC) + strR
+            str = strL + Self.nCheck(strC, followedBy: strR) + strR
             n += 1
         }
         n = 0
@@ -162,7 +162,7 @@ public extension String {
         return str
     }
     
-    private static func nCheck(_ str: String) -> String {
+    private static func nCheck(_ str: String, followedBy following: String) -> String {
         switch str.lowercased() {
         case "na": return str
         case "ni": return str
@@ -170,7 +170,19 @@ public extension String {
         case "ne": return str
         case "no": return str
         case "ny": return str
-        case "n'", "nn": return "ん"
+        case "n'": return "ん"
+        case "nn":
+            if let next = following.first?.lowercased() {
+                if "aiueo".contains(next) {
+                    return "んn"
+                }
+                if next == "y",
+                   let vowel = following.dropFirst().first?.lowercased(),
+                   "aiueo".contains(vowel) {
+                    return "んn"
+                }
+            }
+            return "ん"
         default: return str
         }
     }
