@@ -498,9 +498,57 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertEqual("クヽ".expandingJapaneseKanaIterationMarks(), "クク")
         XCTAssertEqual("スヾ".expandingJapaneseKanaIterationMarks(), "スズ")
         let decomposedZu = "す\u{3099}"
-        XCTAssertEqual((decomposedZu + "ゝ").expandingJapaneseKanaIterationMarks(), decomposedZu + decomposedZu)
-        XCTAssertEqual((decomposedZu + "ゞ").expandingJapaneseKanaIterationMarks(), decomposedZu + decomposedZu)
+        XCTAssertEqual((decomposedZu + "ゝ").expandingJapaneseKanaIterationMarks(), decomposedZu + "す")
+        XCTAssertEqual((decomposedZu + "ゞ").expandingJapaneseKanaIterationMarks(), decomposedZu + "ず")
     }
+
+    func testIterationMarksSelectVoicingIndependentlyOfSourceSoundMarks() {
+        // Unicode 17, section 18.4.1: the iteration mark selects unvoiced or voiced.
+        // Section 18.4.2 gives the katakana marks the same function.
+        let cases = [
+            ("がゝ", "がか"), ("がゞ", "がが"),
+            ("ぱゝ", "ぱは"), ("ぱゞ", "ぱば"),
+            ("ガヽ", "ガカ"), ("ガヾ", "ガガ"),
+            ("パヽ", "パハ"), ("パヾ", "パバ"),
+            ("か\u{3099}ゝ", "か\u{3099}か"), ("か\u{3099}ゞ", "か\u{3099}が"),
+            ("は\u{309A}ゝ", "は\u{309A}は"), ("は\u{309A}ゞ", "は\u{309A}ば"),
+            ("カ\u{3099}ヽ", "カ\u{3099}カ"), ("カ\u{3099}ヾ", "カ\u{3099}ガ"),
+            ("ハ\u{309A}ヽ", "ハ\u{309A}ハ"), ("ハ\u{309A}ヾ", "ハ\u{309A}バ")
+        ]
+        for (source, expected) in cases {
+            // Byte comparison also proves that the original source syllable stays intact.
+            XCTAssertEqual(source.expandingJapaneseKanaIterationMarks().map { Array($0.utf8) },
+                           Array(expected.utf8), source)
+            let substring = ("A" + source + "Z").dropFirst().dropLast()
+            XCTAssertEqual(substring.expandingJapaneseKanaIterationMarks().map { Array($0.utf8) },
+                           Array(expected.utf8), source)
+        }
+    }
+
+    func testIterationExpansionPreservesUnsupportedAndLeadingMarkFallback() {
+        for source in ["ゝかな", "ゞかな", "ヽカナ", "ヾカナ", "Aゝ", "猫ヾ", "か ゝ", "すゝ猫ヾ"] {
+            XCTAssertNil(source.expandingJapaneseKanaIterationMarks(), source)
+        }
+        XCTAssertNil("がぱガパ".expandingJapaneseKanaIterationMarks())
+        XCTAssertEqual("かゝゞ".expandingJapaneseKanaIterationMarks(), "かかが")
+    }
+
+    func testDecomposedIterationMarkIsOneVoicedTokenBeforeAnotherMark() {
+        let cases = [
+            ("かゝ\u{3099}ゝ", "かがか"), ("カヽ\u{3099}ヽ", "カガカ"),
+            ("ぱゝ\u{3099}ゝ", "ぱばは"), ("パヽ\u{3099}ヽ", "パバハ"),
+            ("か\u{3099}ゝ\u{3099}ゝ", "か\u{3099}がか"),
+            ("は\u{309A}ゝ\u{3099}ゝ", "は\u{309A}ばは"),
+            ("かゞ\u{3099}ゝ", "かが\u{3099}か")
+        ]
+        for (source, expected) in cases {
+            XCTAssertEqual(source.expandingJapaneseKanaIterationMarks().map { Array($0.utf8) },
+                           Array(expected.utf8), source)
+        }
+        XCTAssertNil("ゝ\u{3099}ゝ".expandingJapaneseKanaIterationMarks())
+        XCTAssertNil("Aゝ\u{3099}ゝ".expandingJapaneseKanaIterationMarks())
+    }
+
 
     
     // MARK: - withKanaToRomaji Tests
