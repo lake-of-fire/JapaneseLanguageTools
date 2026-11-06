@@ -748,6 +748,41 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertEqual("あっ".withKanaToRomaji, "axtu")
     }
     
+    func testRomajiSyllabicNPreservesFollowingNMora() {
+        for (romaji, kana) in [
+            ("nna", "んな"), ("nni", "んに"), ("nnu", "んぬ"),
+            ("nne", "んね"), ("nno", "んの"),
+            ("nnya", "んにゃ"), ("nnyi", "んにぃ"), ("nnyu", "んにゅ"),
+            ("nnye", "んにぇ"), ("nnyo", "んにょ"),
+            ("kanni", "かんに"), ("konnichiha", "こんにちは"),
+            ("annai", "あんない"), ("konnyaku", "こんにゃく"),
+            ("onna", "おんな"), ("shinnyuu", "しんにゅう"),
+            ("NNA", "んな"), ("nnYA", "んにゃ")
+        ] {
+            XCTAssertEqual(romaji.withRomajiToHiragana, kana, romaji)
+        }
+    }
+
+    func testRomajiSyllabicNPreservesBoundariesAndSokuon() {
+        for (romaji, kana) in [
+            ("n", "ん"), ("nn", "ん"), ("n'", "ん"),
+            ("n'a", "んあ"), ("n'ya", "んや"),
+            ("kanpai", "かんぱい"), ("kan.", "かん。"), ("nn!", "ん！"),
+            ("nny", "んy"),
+            ("kappa", "かっぱ"), ("gakkou", "がっこう"),
+            ("kitte", "きって"), ("massugu", "まっすぐ")
+        ] {
+            XCTAssertEqual(romaji.withRomajiToHiragana, kana, romaji)
+        }
+    }
+
+    func testKanaRomajiRoundTripsBeforeNMorae() {
+        for kana in ["かんに", "こんにちは", "あんない", "こんにゃく", "おんな", "しんにゅう"] {
+            XCTAssertEqual(kana.withKanaToRomaji.withRomajiToHiragana, kana)
+            XCTAssertEqual(kana.withKanaToBeginnerHepburnRomaji.withRomajiToHiragana, kana)
+        }
+    }
+
     func testRoundTripWithRomajiToHiragana() {
         // These should round-trip under the same scheme used by the forward mapper.
         let romajiSamples = [
