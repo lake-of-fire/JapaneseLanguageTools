@@ -32,34 +32,43 @@ public enum TofuguAudioIndex {
             return nil
         }
 
-        let valuesCSV: String?
+        let recording: (term: String, reading: String)?
         do {
-            valuesCSV = try dbQueue.read { db in
-                try String.fetchOne(
-                    db,
-                    sql: """
-                        SELECT "values_csv"
-                        FROM "tofugu_audio_index"
-                        WHERE "term" = ?
-                        LIMIT 1
-                        """,
-                    arguments: [term]
-                )
+            recording = try dbQueue.read { db in
+                // SQLite compares exact bytes, while callers can supply canonically
+                // equivalent kana. Keep each spelling: Swift String equality would
+                // collapse the composed and decomposed lookup keys.
+                for spelling in [term, term.precomposedStringWithCanonicalMapping,
+                                 term.decomposedStringWithCanonicalMapping] {
+                    guard let row = try Row.fetchOne(
+                        db,
+                        sql: """
+                            SELECT "term", "values_csv"
+                            FROM "tofugu_audio_index"
+                            WHERE "term" = ?
+                            LIMIT 1
+                            """,
+                        arguments: [spelling]
+                    ) else { continue }
+                    let indexedTerm: String = row["term"]
+                    let valuesCSV: String = row["values_csv"]
+                    if let reading = valuesCSV.split(separator: ",").first(where: {
+                        String($0) == readingKana
+                    }) {
+                        return (term: indexedTerm, reading: String(reading))
+                    }
+                }
+                return nil
             }
         } catch {
             return nil
         }
 
-        guard let valuesCSV else {
+        guard let recording else {
             return nil
         }
 
-        let values = valuesCSV.split(separator: ",").map(String.init)
-        guard values.contains(readingKana) else {
-            return nil
-        }
-
-        let filename = "\(term)【\(readingKana)】.mp3"
+        let filename = "\(recording.term)【\(recording.reading)】.mp3"
         guard let escaped = "https://manabi.io/media/audio/tofugu/\(filename)"
             .addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed),
               let url = URL(string: escaped) else {
