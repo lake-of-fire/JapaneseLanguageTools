@@ -3,6 +3,44 @@ import AVFoundation
 @testable import JapaneseLanguageTools
 
 final class JapaneseLanguageToolsTests: XCTestCase {
+    func testTofuguAudioIndexMatchesCanonicalTermAndReadingVariants() throws {
+        let recordings = [
+            (term: "ご飯", reading: "ごはん", filename: "こ\u{3099}飯【こ\u{3099}はん】.mp3"),
+            (term: "飛ぶ", reading: "とぶ", filename: "飛ふ\u{3099}【とふ\u{3099}】.mp3")
+        ]
+        for recording in recordings {
+            for term in [recording.term.precomposedStringWithCanonicalMapping,
+                         recording.term.decomposedStringWithCanonicalMapping] {
+                for reading in [recording.reading.precomposedStringWithCanonicalMapping,
+                                recording.reading.decomposedStringWithCanonicalMapping] {
+                    let url = try XCTUnwrap(TofuguAudioIndex.audioURL(term: term, readingKana: reading))
+                    XCTAssertEqual(url.scheme, "https")
+                    XCTAssertEqual(url.host, "manabi.io")
+                    // Check bytes: String equality alone accepts either normalization.
+                    XCTAssertEqual(Array(url.lastPathComponent.utf8), Array(recording.filename.utf8))
+                }
+            }
+        }
+    }
+
+    func testTofuguAudioIndexRetainsSingleAndMultipleReadings() throws {
+        for (term, reading, filename) in [
+            ("一", "いち", "一【いち】.mp3"),
+            ("五", "ご", "五【こ\u{3099}】.mp3"),
+            ("人", "にん", "人【にん】.mp3"),
+            ("人", "ひと", "人【ひと】.mp3")
+        ] {
+            let url = try XCTUnwrap(TofuguAudioIndex.audioURL(term: term, readingKana: reading))
+            XCTAssertEqual(Array(url.lastPathComponent.utf8), Array(filename.utf8))
+        }
+    }
+
+    func testTofuguAudioIndexRejectsUnknownTermsAndMismatchedReadings() {
+        XCTAssertNil(TofuguAudioIndex.audioURL(term: "ご飯", readingKana: "めし"))
+        XCTAssertNil(TofuguAudioIndex.audioURL(term: "人", readingKana: "じん"))
+        XCTAssertNil(TofuguAudioIndex.audioURL(term: "not-an-indexed-term", readingKana: "いち"))
+    }
+
     func testDigitsOnlyIsConsistentAcrossStringProtocolDispatch() {
         func generic<S: StringProtocol>(_ value: S) -> Bool {
             value.isASCIIOrFullWidthDigitsOnly
