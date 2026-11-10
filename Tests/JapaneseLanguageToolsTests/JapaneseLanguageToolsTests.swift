@@ -535,6 +535,7 @@ final class JapaneseLanguageToolsTests: XCTestCase {
 
     func testDecomposedIterationMarkIsOneVoicedTokenBeforeAnotherMark() {
         let cases = [
+            ("かゝ\u{3099}", "かが"), ("パヽ\u{3099}", "パバ"),
             ("かゝ\u{3099}ゝ", "かがか"), ("カヽ\u{3099}ヽ", "カガカ"),
             ("ぱゝ\u{3099}ゝ", "ぱばは"), ("パヽ\u{3099}ヽ", "パバハ"),
             ("か\u{3099}ゝ\u{3099}ゝ", "か\u{3099}がか"),
@@ -543,6 +544,9 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         ]
         for (source, expected) in cases {
             XCTAssertEqual(source.expandingJapaneseKanaIterationMarks().map { Array($0.utf8) },
+                           Array(expected.utf8), source)
+            let substring = ("A" + source + "Z").dropFirst().dropLast()
+            XCTAssertEqual(substring.expandingJapaneseKanaIterationMarks().map { Array($0.utf8) },
                            Array(expected.utf8), source)
         }
         XCTAssertNil("ゝ\u{3099}ゝ".expandingJapaneseKanaIterationMarks())
