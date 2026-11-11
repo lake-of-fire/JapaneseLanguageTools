@@ -2,6 +2,11 @@ public struct RubyTextProjection: Equatable, Sendable {
     public let surface: String
     public let reading: String
     public let containsRuby: Bool
+
+    /// A cheap marker-presence check for lookup actions, not markup validation.
+    public static func containsAozoraMarkupMarkers(in text: String) -> Bool {
+        text.contains("｜") && text.contains("《") && text.contains("》")
+    }
 }
 
 /// One accepted annotation or an untouched literal gap, using the projection
