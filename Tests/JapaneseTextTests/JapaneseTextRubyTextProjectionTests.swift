@@ -1,7 +1,7 @@
 import XCTest
 import JapaneseText
 
-final class RubyTextProjectionTests: XCTestCase {
+final class JapaneseTextRubyTextProjectionTests: XCTestCase {
     func testComponentsPreserveExactSourceAndAgreeWithProjectionGrammar() {
         for text in [
             "", "そのまま", "前｜猫《ねこ》と｜犬《いぬ》後",
