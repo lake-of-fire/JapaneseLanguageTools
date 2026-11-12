@@ -7,6 +7,7 @@ let package = Package(
     name: "JapaneseLanguageTools",
     platforms: [.macOS("15.0"), .iOS(.v15), .watchOS(.v4)],
     products: [
+        .library(name: "JapaneseText", targets: ["JapaneseText"]),
         .library(
             name: "JapaneseLanguageTools",
             targets: ["JapaneseLanguageTools"]),
@@ -19,9 +20,12 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-syntax", exact: "603.0.1"),
     ],
     targets: [
+        .target(name: "JapaneseText"),
+        .testTarget(name: "JapaneseTextTests", dependencies: ["JapaneseText"]),
         .target(
             name: "JapaneseLanguageTools",
             dependencies: [
+                "JapaneseText",
                 .product(name: "Mute", package: "Mute"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
