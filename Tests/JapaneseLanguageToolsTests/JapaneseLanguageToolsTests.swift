@@ -751,6 +751,35 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         }
     }
     
+    func testHalfwidthKatakanaRomanizesLikeFullwidthKatakana() {
+        for (halfwidth, fullwidth, romaji, hepburn) in [
+            ("ｺｰﾋｰ", "コーヒー", "koohii", "koohii"),
+            ("ｶﾞｯｺｳ", "ガッコウ", "gakkou", "gakkou"),
+            ("ﾊﾟﾝ", "パン", "pan", "pan"),
+            ("ｼｬﾂ", "シャツ", "syatsu", "shatsu"),
+            ("ﾃｨｰ", "ティー", "thii", "tii"),
+            ("ｳﾞｧ", "ヴァ", "va", "va"),
+            ("ﾎﾝﾔ", "ホンヤ", "hon'ya", "hon'ya")
+        ] {
+            XCTAssertEqual(halfwidth.withKanaToRomaji, romaji, halfwidth)
+            XCTAssertEqual(halfwidth.withKanaToRomaji, fullwidth.withKanaToRomaji, halfwidth)
+            XCTAssertEqual(halfwidth.withKanaToBeginnerHepburnRomaji, hepburn, halfwidth)
+            XCTAssertEqual(halfwidth.withKanaToBeginnerHepburnRomaji, fullwidth.withKanaToBeginnerHepburnRomaji, halfwidth)
+        }
+    }
+
+    func testRomanizationPreservesWidthOutsideKatakanaRuns() {
+        let mixed = "Ａ①ｼｬ｡ﾊﾟ😊！"
+        XCTAssertEqual(mixed.withKanaToRomaji, "Ａ①sya｡pa😊!")
+        XCTAssertEqual(mixed.withKanaToBeginnerHepburnRomaji, "Ａ①sha｡pa😊!")
+    }
+
+    func testRomanizationRecognizesMixedWidthSoundMarks() {
+        let mixed = "カﾞｶ\u{3099} ハﾟﾊ\u{309A}"
+        XCTAssertEqual(mixed.withKanaToRomaji, "gaga papa")
+        XCTAssertEqual(mixed.withKanaToBeginnerHepburnRomaji, "gaga papa")
+    }
+
     func testYoonAndDigraphs() {
         let cases: [(String, String)] = [
             ("きゃきゅきょ", "kyak Yukyo".replacingOccurrences(of: " ", with: "").lowercased()), // guard against accidental spaces

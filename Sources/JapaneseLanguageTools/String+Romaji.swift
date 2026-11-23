@@ -11,6 +11,7 @@ import Foundation
 private enum UnicodeScalarConstants {
     static let katakanaStart: UInt32 = 0x30A1
     static let katakanaEnd: UInt32 = 0x30F6
+    static let halfwidthKatakana: ClosedRange<UInt32> = 0xFF66...0xFF9F
     static let kanaShift: UInt32 = 0x60
     static let utf8TwoByteMaxScalar: UInt32 = 0x7FF
     static let utf8ThreeByteMaxScalar: UInt32 = 0xFFFF
@@ -823,33 +824,52 @@ public extension String {
         }
     }
 
-    // Normalize: katakana -> hiragana (preserve 'ー'); leave others intact.
+    // Normalize katakana to hiragana without folding width outside kana.
     private static func normalizeToHiragana(_ s: String) -> String {
         return withUTF8Buffer(s) { buffer in
             var out = [UInt8]()
             out.reserveCapacity(buffer.count)
             var index = 0
             let count = buffer.count
+            let halfwidthKatakana = UnicodeScalarConstants.halfwidthKatakana
 
             while index < count {
-                if let decoded = decodeUTF8Scalar(in: buffer, at: index) {
-                    var scalar = decoded.scalar
-                    if scalar >= UnicodeScalarConstants.katakanaStart
-                        && scalar <= UnicodeScalarConstants.katakanaEnd {
-                        scalar -= UnicodeScalarConstants.kanaShift
-                    }
-                    encodeUTF8Scalar(scalar, into: &out)
-                    index += decoded.length
-                } else {
+                guard let decoded = decodeUTF8Scalar(in: buffer, at: index) else {
                     out.append(buffer[index])
                     index += 1
+                    continue
+                }
+                let start = index
+                index += decoded.length
+                guard halfwidthKatakana.contains(decoded.scalar) else {
+                    encodeUTF8Scalar(hiraganaScalar(decoded.scalar), into: &out)
+                    continue
+                }
+
+                while index < count,
+                      let next = decodeUTF8Scalar(in: buffer, at: index),
+                      halfwidthKatakana.contains(next.scalar) {
+                    index += next.length
+                }
+                // Fold the run together so a halfwidth sound mark can compose
+                // with its kana. Other compatibility characters stay untouched.
+                let halfwidth = String(decoding: buffer[start..<index], as: UTF8.self)
+                for scalar in halfwidth.precomposedStringWithCompatibilityMapping.unicodeScalars {
+                    encodeUTF8Scalar(hiraganaScalar(scalar.value), into: &out)
                 }
             }
 
             return String(decoding: out, as: UTF8.self)
         }
     }
-    
+
+    private static func hiraganaScalar(_ scalar: UInt32) -> UInt32 {
+        if scalar >= UnicodeScalarConstants.katakanaStart && scalar <= UnicodeScalarConstants.katakanaEnd {
+            return scalar - UnicodeScalarConstants.kanaShift
+        }
+        return scalar
+    }
+
     // Peek the first romaji character of the next kana chunk (for deciding "n'").
     private static func peekNextRomajiFirst(hiragana: String, from idx: String.Index) -> Character? {
         guard idx < hiragana.endIndex else { return nil }
