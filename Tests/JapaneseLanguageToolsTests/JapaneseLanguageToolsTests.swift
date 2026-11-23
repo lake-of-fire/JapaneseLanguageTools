@@ -20,13 +20,42 @@ final class JapaneseLanguageToolsTests: XCTestCase {
 
 #if DEBUG
     @MainActor
+    func testMissingRecordingUsesSpokenReadingForSynthesis() async throws {
+        ManabiSpokenAudioSession.resetForTesting()
+        defer { ManabiSpokenAudioSession.resetForTesting() }
+        configureAudioSessionForTesting()
+
+        let tts = JapaneseTTS()
+        tts.synthesizedSpeechVoiceResolverOverride = { nil }
+        tts.pronunciationAudioURLResolver = { expression, reading in
+            XCTAssertEqual(expression, "静かではない")
+            XCTAssertEqual(reading, "しずかではない")
+            return nil
+        }
+        let synthesisStarted = expectation(description: "synthesis started")
+        var synthesizedUtterance: AVSpeechUtterance?
+        tts.synthesizedSpeechStartOverride = {
+            synthesizedUtterance = $0
+            synthesisStarted.fulfill()
+        }
+
+        tts.speakJapanese(expression: "静かではない", readingKana: "しずかではない",
+                          synthesisReadingKana: "しずかでわない")
+        await fulfillment(of: [synthesisStarted], timeout: 1)
+        let utterance = try XCTUnwrap(synthesizedUtterance)
+        XCTAssertEqual(utterance.speechString, "シズカデワナイ")
+        tts.handleSynthesizedUtteranceEvent(utterance)
+    }
+
+    @MainActor
     func testFailedRecordedPronunciationEvictsCacheAndFallsBackToSynthesis() async throws {
         ManabiSpokenAudioSession.resetForTesting()
         defer { ManabiSpokenAudioSession.resetForTesting() }
         configureAudioSessionForTesting()
 
         let expression = "recorded-failure-\(UUID().uuidString)"
-        let reading = "よみ"
+        let reading = "しずかではない"
+        let spokenReading = "しずかでわない"
         let remoteURL = URL(string: "https://example.com/\(expression).mp3")!
         let downloadedURL = try makeTemporaryAudioFile()
         let cachedURL = try pronunciationCacheURL(expression: expression, reading: reading)
@@ -38,16 +67,22 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         var synthesizedUtterance: AVSpeechUtterance?
         let recordedPlaybackStarted = expectation(description: "recorded playback started")
         let speechFinished = expectation(description: "synthesized speech finished")
-        tts.pronunciationAudioURLResolver = { _, _ in remoteURL }
+        tts.pronunciationAudioURLResolver = { term, lookupReading in
+            XCTAssertEqual(term, expression)
+            XCTAssertEqual(lookupReading, reading)
+            return remoteURL
+        }
         tts.pronunciationAudioDownloader = .init { _ in downloadedURL }
-        tts.recordedAudioPlaybackOverride = { _, _, ready, _, failed in
+        tts.recordedAudioPlaybackOverride = { url, playbackReading, ready, _, failed in
+            XCTAssertEqual(url, cachedURL)
+            XCTAssertEqual(playbackReading, reading)
             recordedReady = ready
             recordedFailure = failed
             recordedPlaybackStarted.fulfill()
         }
         tts.synthesizedSpeechStartOverride = { utterance in synthesizedUtterance = utterance }
 
-        tts.speakJapanese(expression: expression, readingKana: reading)
+        tts.speakJapanese(expression: expression, readingKana: reading, synthesisReadingKana: spokenReading)
         await fulfillment(of: [recordedPlaybackStarted], timeout: 1)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: cachedURL.path))
@@ -57,7 +92,7 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         recordedFailure?()
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: cachedURL.path))
-        XCTAssertEqual(synthesizedUtterance?.speechString, "ヨミ")
+        XCTAssertEqual(synthesizedUtterance?.speechString, "シズカデワナイ")
         XCTAssertTrue(tts.isPlaying)
         XCTAssertEqual(ManabiSpokenAudioSession.activeLeaseCountForTesting, 1)
 
