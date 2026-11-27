@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "JapaneseLanguageTools",
-    platforms: [.macOS("15.0"), .iOS(.v15), .watchOS(.v4)],
+    platforms: [.macOS("15.0"), .iOS(.v15), .watchOS(.v9)],
     products: [
         .library(
             name: "JapaneseLanguageTools",

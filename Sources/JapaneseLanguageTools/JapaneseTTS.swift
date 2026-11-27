@@ -154,6 +154,19 @@ private final class SafeSilentSwitchDetector {
 
 public class JapaneseTTS: NSObject, ObservableObject {
     public static let shared = JapaneseTTS()
+
+    private struct SpeechRequest {
+        let id = UUID()
+        let onFinish: (@MainActor (UUID) -> Void)?
+
+        @MainActor
+        func notifyFinished() {
+            guard let onFinish else { return }
+            let id = id
+            // Deliver after the caller receives the ID and playback cleanup ends.
+            Task { @MainActor in onFinish(id) }
+        }
+    }
     
     @MainActor
     @Published public var isEnabled = false
@@ -163,7 +176,13 @@ public class JapaneseTTS: NSObject, ObservableObject {
     @MainActor
     private var speechRequestTask: Task<Void, Never>?
     @MainActor
-    private var activeSpeechRequestID: UUID?
+    private var activeSpeechRequest: SpeechRequest?
+    @MainActor
+    private var activeSpeechRequestID: UUID? { activeSpeechRequest?.id }
+    @MainActor
+    private var pendingPlayingState = false
+    @MainActor
+    private var isPublishingPlayingState = false
     @MainActor
     private var synthesizedJapaneseVoice: AVSpeechSynthesisVoice?
     @MainActor
@@ -182,10 +201,8 @@ public class JapaneseTTS: NSObject, ObservableObject {
     @MainActor var speechRequestCompletionOverride: (() -> Void)?
     @MainActor var speechRequestTaskForTesting: Task<Void, Never>? { speechRequestTask }
     @MainActor func cancelSpeechRequestForTesting() {
-        speechRequestTask?.cancel()
-        speechRequestTask = nil
         if let requestID = activeSpeechRequestID {
-            finishSpeechRequest(requestID)
+            cancelPronunciation(requestID)
         }
     }
 #endif
@@ -262,7 +279,8 @@ public class JapaneseTTS: NSObject, ObservableObject {
     @discardableResult
     @MainActor
     private func refreshIsEnabled() -> Bool {
-        let enabled = Self.ttsEnabled() && !isPlaying
+        let playing = isPublishingPlayingState ? pendingPlayingState : isPlaying
+        let enabled = Self.ttsEnabled() && !playing
         isEnabled = enabled
         return enabled
     }
@@ -312,17 +330,31 @@ public class JapaneseTTS: NSObject, ObservableObject {
         player.replaceCurrentItem(with: nil)
         activeUtterance = nil
         speechSynth.stopSpeaking(at: .immediate)
-        isPlaying = false
         try? pronunciationSessionLease?.release()
         pronunciationSessionLease = nil
+        publishPlayingState(false)
+    }
+
+    @MainActor
+    private func beginSpeechRequest(onFinish: (@MainActor (UUID) -> Void)? = nil) -> UUID {
+        let previous = activeSpeechRequest
+        speechRequestTask?.cancel()
+        speechRequestTask = nil
+        let request = SpeechRequest(onFinish: onFinish)
+        activeSpeechRequest = request
+        resetPronunciationPlayback()
+        previous?.notifyFinished()
+        return request.id
     }
 
     @MainActor
     private func finishSpeechRequest(_ requestID: UUID) {
-        guard activeSpeechRequestID == requestID else { return }
-        activeSpeechRequestID = nil
+        guard let request = activeSpeechRequest, request.id == requestID else { return }
+        activeSpeechRequest = nil
+        speechRequestTask = nil
         resetPronunciationPlayback()
-        refreshIsEnabled()
+        if activeSpeechRequest == nil { refreshIsEnabled() }
+        request.notifyFinished()
     }
 
     @MainActor
@@ -335,11 +367,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
     @MainActor
     public func speakJapaneseIfUnmuted(expression: String, readingKana: String? = nil) async {
         guard refreshIsEnabled(), !Task.isCancelled else { return }
-        speechRequestTask?.cancel()
-        speechRequestTask = nil
-        resetPronunciationPlayback()
-        let requestID = UUID()
-        activeSpeechRequestID = requestID
+        let requestID = beginSpeechRequest()
         await performSpeakJapanese(
             expression: expression,
             readingKana: readingKana,
@@ -349,23 +377,80 @@ public class JapaneseTTS: NSObject, ObservableObject {
     
     @MainActor
     public func speakJapanese(expression: String, readingKana: String? = nil) {
+        speakJapanese(expression: expression, readingKana: readingKana, synthesisReadingKana: nil)
+    }
+
+    /// Uses the written reading to find a recording and the spoken reading for synthesized speech.
+    @MainActor
+    public func speakJapanese(expression: String, readingKana: String?, synthesisReadingKana: String?) {
+        let requestID = beginSpeechRequest()
+        queuePronunciation(
+            expression: expression,
+            readingKana: readingKana,
+            synthesisReadingKana: synthesisReadingKana,
+            requestID: requestID
+        )
+    }
+
+    /// Starts explicit pronunciation. The main-actor callback receives the
+    /// returned ID when the request finishes, fails, is canceled or is replaced.
+    /// Callback delivery always follows the return from this method.
+    @MainActor
+    public func startPronunciation(
+        expression: String,
+        readingKana: String? = nil,
+        onFinish: @escaping @MainActor (UUID) -> Void
+    ) -> UUID {
+        let requestID = beginSpeechRequest(onFinish: onFinish)
+        queuePronunciation(expression: expression, readingKana: readingKana, requestID: requestID)
+        return requestID
+    }
+
+    /// Stops pronunciation only if the supplied request still owns playback.
+    @MainActor
+    public func cancelPronunciation(_ requestID: UUID) {
+        guard activeSpeechRequestID == requestID else { return }
         speechRequestTask?.cancel()
-        resetPronunciationPlayback()
-        let requestID = UUID()
-        activeSpeechRequestID = requestID
+        finishSpeechRequest(requestID)
+    }
+
+    @MainActor
+    private func queuePronunciation(
+        expression: String,
+        readingKana: String?,
+        synthesisReadingKana: String? = nil,
+        requestID: UUID
+    ) {
+        // A synchronous playback observer may already have replaced the request.
+        guard activeSpeechRequestID == requestID else { return }
         speechRequestTask = Task { @MainActor [weak self] in
             await self?.performSpeakJapanese(
                 expression: expression,
                 readingKana: readingKana,
+                synthesisReadingKana: synthesisReadingKana,
                 requestID: requestID
             )
         }
     }
 
     @MainActor
+    private func publishPlayingState(_ value: Bool) {
+        // Published delivers before storing its value. A synchronous subscriber
+        // may stop this request or replace it during delivery.
+        pendingPlayingState = value
+        guard !isPublishingPlayingState else { return }
+        isPublishingPlayingState = true
+        defer { isPublishingPlayingState = false }
+        repeat {
+            isPlaying = pendingPlayingState
+        } while isPlaying != pendingPlayingState
+    }
+
+    @MainActor
     private func performSpeakJapanese(
         expression: String,
         readingKana: String?,
+        synthesisReadingKana: String? = nil,
         requestID: UUID
     ) async {
         defer {
@@ -374,14 +459,16 @@ public class JapaneseTTS: NSObject, ObservableObject {
 #endif
         }
         guard !Task.isCancelled, activeSpeechRequestID == requestID else { return }
+        let synthesisReading = synthesisReadingKana ?? readingKana ?? expression
         guard let readingKana = readingKana else {
-            speakSynthesizedJapanese(text: hiraganaToKatakana(text: expression), requestID: requestID)
+            speakSynthesizedJapanese(text: hiraganaToKatakana(text: synthesisReading), requestID: requestID)
             return
         }
         do {
             try await playAudio(
                 expression: expression,
                 readingKana: readingKana,
+                synthesisReadingKana: synthesisReading,
                 requestID: requestID
             )
         } catch is CancellationError {
@@ -389,7 +476,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
             return
         } catch {
             guard !Task.isCancelled, activeSpeechRequestID == requestID else { return }
-            speakSynthesizedJapanese(text: hiraganaToKatakana(text: readingKana), requestID: requestID)
+            speakSynthesizedJapanese(text: hiraganaToKatakana(text: synthesisReading), requestID: requestID)
         }
     }
     
@@ -397,6 +484,7 @@ public class JapaneseTTS: NSObject, ObservableObject {
     private func speakSynthesizedJapanese(text: String, requestID: UUID) {
         guard activeSpeechRequestID == requestID else { return }
         resetPronunciationPlayback()
+        guard activeSpeechRequestID == requestID else { return }
         guard !text.isEmpty else {
             finishSpeechRequest(requestID)
             return
@@ -411,7 +499,8 @@ public class JapaneseTTS: NSObject, ObservableObject {
             return
         }
         activeUtterance = utterance
-        isPlaying = true
+        publishPlayingState(true)
+        guard activeUtterance === utterance else { return }
 #if DEBUG
         if let synthesizedSpeechStartOverride {
             synthesizedSpeechStartOverride(utterance)
@@ -463,6 +552,7 @@ extension JapaneseTTS {
     private func playAudio(
         expression: String,
         readingKana: String,
+        synthesisReadingKana: String,
         requestID: UUID
     ) async throws {
 #if DEBUG
@@ -487,7 +577,7 @@ extension JapaneseTTS {
         
         if (try? localAudioPath.checkResourceIsReachable()) ?? false {
             guard activeSpeechRequestID == requestID else { throw CancellationError() }
-            loadAndPlayAudio(url: localAudioPath, readingKana: readingKana, requestID: requestID)
+            loadAndPlayAudio(url: localAudioPath, readingKana: readingKana, synthesisReadingKana: synthesisReadingKana, requestID: requestID)
         } else {
             let temporaryURL = try await pronunciationAudioDownloader.download(remoteAudioURL)
             try Task.checkCancellation()
@@ -503,19 +593,20 @@ extension JapaneseTTS {
             }
             try Task.checkCancellation()
             guard activeSpeechRequestID == requestID else { throw CancellationError() }
-            loadAndPlayAudio(url: localAudioPath, readingKana: readingKana, requestID: requestID)
+            loadAndPlayAudio(url: localAudioPath, readingKana: readingKana, synthesisReadingKana: synthesisReadingKana, requestID: requestID)
         }
     }
     
     @MainActor
-    private func loadAndPlayAudio(url: URL, readingKana: String, requestID: UUID) {
+    private func loadAndPlayAudio(url: URL, readingKana: String, synthesisReadingKana: String, requestID: UUID) {
         guard activeSpeechRequestID == requestID else { return }
         let playbackID = UUID()
         activePronunciationPlaybackID = playbackID
         shouldPlayOnceReady = true
 #if DEBUG
         if let recordedAudioPlaybackOverride {
-            isPlaying = true
+            publishPlayingState(true)
+            guard activePronunciationPlaybackID == playbackID else { return }
             recordedAudioPlaybackOverride(
                 url,
                 readingKana,
@@ -524,7 +615,7 @@ extension JapaneseTTS {
                     self.handlePronunciationAudioEvent(
                         .readyToPlay,
                         url: url,
-                        readingKana: readingKana,
+                        synthesisReadingKana: synthesisReadingKana,
                         requestID: requestID,
                         playbackID: playbackID
                     )
@@ -534,7 +625,7 @@ extension JapaneseTTS {
                     self.handlePronunciationAudioEvent(
                         .didFinish,
                         url: url,
-                        readingKana: readingKana,
+                        synthesisReadingKana: synthesisReadingKana,
                         requestID: requestID,
                         playbackID: playbackID
                     )
@@ -544,7 +635,7 @@ extension JapaneseTTS {
                     self.handlePronunciationAudioEvent(
                         .didFail,
                         url: url,
-                        readingKana: readingKana,
+                        synthesisReadingKana: synthesisReadingKana,
                         requestID: requestID,
                         playbackID: playbackID
                     )
@@ -555,7 +646,8 @@ extension JapaneseTTS {
 #endif
         let item = AVPlayerItem(url: url)
         playerItem = item
-        isPlaying = true
+        publishPlayingState(true)
+        guard playerItem === item else { return }
         playerItemStatusCancellable = item.publisher(for: \.status)
             .receive(on: RunLoop.main)
             .sink { [weak self] status in
@@ -563,9 +655,9 @@ extension JapaneseTTS {
                     guard let self else { return }
                     switch status {
                     case .readyToPlay:
-                        self.handlePronunciationAudioEvent(.readyToPlay, url: url, readingKana: readingKana, requestID: requestID, playbackID: playbackID, item: item)
+                        self.handlePronunciationAudioEvent(.readyToPlay, url: url, synthesisReadingKana: synthesisReadingKana, requestID: requestID, playbackID: playbackID, item: item)
                     case .failed:
-                        self.handlePronunciationAudioEvent(.didFail, url: url, readingKana: readingKana, requestID: requestID, playbackID: playbackID, item: item)
+                        self.handlePronunciationAudioEvent(.didFail, url: url, synthesisReadingKana: synthesisReadingKana, requestID: requestID, playbackID: playbackID, item: item)
                     default: break
                     }
                 }
@@ -574,7 +666,7 @@ extension JapaneseTTS {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.handlePronunciationAudioEvent(.didFinish, url: url, readingKana: readingKana, requestID: requestID, playbackID: playbackID, item: item)
+                    self?.handlePronunciationAudioEvent(.didFinish, url: url, synthesisReadingKana: synthesisReadingKana, requestID: requestID, playbackID: playbackID, item: item)
                 }
             }
             .store(in: &playerItemCompletionCancellables)
@@ -582,7 +674,7 @@ extension JapaneseTTS {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.handlePronunciationAudioEvent(.didFail, url: url, readingKana: readingKana, requestID: requestID, playbackID: playbackID, item: item)
+                    self?.handlePronunciationAudioEvent(.didFail, url: url, synthesisReadingKana: synthesisReadingKana, requestID: requestID, playbackID: playbackID, item: item)
                 }
             }
             .store(in: &playerItemCompletionCancellables)
@@ -599,7 +691,7 @@ extension JapaneseTTS {
     private func handlePronunciationAudioEvent(
         _ event: PronunciationAudioEvent,
         url: URL,
-        readingKana: String,
+        synthesisReadingKana: String,
         requestID: UUID,
         playbackID: UUID,
         item: AVPlayerItem? = nil
@@ -631,17 +723,17 @@ extension JapaneseTTS {
         case .didFinish:
             finishSpeechRequest(requestID)
         case .didFail:
-            failedPronunciationAudio(url: url, readingKana: readingKana, requestID: requestID)
+            failedPronunciationAudio(url: url, synthesisReadingKana: synthesisReadingKana, requestID: requestID)
         }
     }
 
     @MainActor
-    private func failedPronunciationAudio(url: URL, readingKana: String, requestID: UUID) {
+    private func failedPronunciationAudio(url: URL, synthesisReadingKana: String, requestID: UUID) {
         guard activeSpeechRequestID == requestID else { return }
         // These are our derived audio-cache bytes, never user-owned content.
         // A failed cached item must not poison every future pronunciation.
         try? FileManager.default.removeItem(at: url)
-        speakSynthesizedJapanese(text: hiraganaToKatakana(text: readingKana), requestID: requestID)
+        speakSynthesizedJapanese(text: hiraganaToKatakana(text: synthesisReadingKana), requestID: requestID)
     }
 }
 
