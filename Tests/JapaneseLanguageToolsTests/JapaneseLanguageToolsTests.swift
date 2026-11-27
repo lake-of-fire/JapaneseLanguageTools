@@ -3,6 +3,44 @@ import AVFoundation
 @testable import JapaneseLanguageTools
 
 final class JapaneseLanguageToolsTests: XCTestCase {
+    func testTofuguAudioIndexMatchesCanonicalTermAndReadingVariants() throws {
+        let recordings = [
+            (term: "ご飯", reading: "ごはん", filename: "こ\u{3099}飯【こ\u{3099}はん】.mp3"),
+            (term: "飛ぶ", reading: "とぶ", filename: "飛ふ\u{3099}【とふ\u{3099}】.mp3")
+        ]
+        for recording in recordings {
+            for term in [recording.term.precomposedStringWithCanonicalMapping,
+                         recording.term.decomposedStringWithCanonicalMapping] {
+                for reading in [recording.reading.precomposedStringWithCanonicalMapping,
+                                recording.reading.decomposedStringWithCanonicalMapping] {
+                    let url = try XCTUnwrap(TofuguAudioIndex.audioURL(term: term, readingKana: reading))
+                    XCTAssertEqual(url.scheme, "https")
+                    XCTAssertEqual(url.host, "manabi.io")
+                    // Check bytes: String equality alone accepts either normalization.
+                    XCTAssertEqual(Array(url.lastPathComponent.utf8), Array(recording.filename.utf8))
+                }
+            }
+        }
+    }
+
+    func testTofuguAudioIndexRetainsSingleAndMultipleReadings() throws {
+        for (term, reading, filename) in [
+            ("一", "いち", "一【いち】.mp3"),
+            ("五", "ご", "五【こ\u{3099}】.mp3"),
+            ("人", "にん", "人【にん】.mp3"),
+            ("人", "ひと", "人【ひと】.mp3")
+        ] {
+            let url = try XCTUnwrap(TofuguAudioIndex.audioURL(term: term, readingKana: reading))
+            XCTAssertEqual(Array(url.lastPathComponent.utf8), Array(filename.utf8))
+        }
+    }
+
+    func testTofuguAudioIndexRejectsUnknownTermsAndMismatchedReadings() {
+        XCTAssertNil(TofuguAudioIndex.audioURL(term: "ご飯", readingKana: "めし"))
+        XCTAssertNil(TofuguAudioIndex.audioURL(term: "人", readingKana: "じん"))
+        XCTAssertNil(TofuguAudioIndex.audioURL(term: "not-an-indexed-term", readingKana: "いち"))
+    }
+
     func testDigitsOnlyIsConsistentAcrossStringProtocolDispatch() {
         func generic<S: StringProtocol>(_ value: S) -> Bool {
             value.isASCIIOrFullWidthDigitsOnly
@@ -661,9 +699,57 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertEqual("クヽ".expandingJapaneseKanaIterationMarks(), "クク")
         XCTAssertEqual("スヾ".expandingJapaneseKanaIterationMarks(), "スズ")
         let decomposedZu = "す\u{3099}"
-        XCTAssertEqual((decomposedZu + "ゝ").expandingJapaneseKanaIterationMarks(), decomposedZu + decomposedZu)
-        XCTAssertEqual((decomposedZu + "ゞ").expandingJapaneseKanaIterationMarks(), decomposedZu + decomposedZu)
+        XCTAssertEqual((decomposedZu + "ゝ").expandingJapaneseKanaIterationMarks(), decomposedZu + "す")
+        XCTAssertEqual((decomposedZu + "ゞ").expandingJapaneseKanaIterationMarks(), decomposedZu + "ず")
     }
+
+    func testIterationMarksSelectVoicingIndependentlyOfSourceSoundMarks() {
+        // Unicode 17, section 18.4.1: the iteration mark selects unvoiced or voiced.
+        // Section 18.4.2 gives the katakana marks the same function.
+        let cases = [
+            ("がゝ", "がか"), ("がゞ", "がが"),
+            ("ぱゝ", "ぱは"), ("ぱゞ", "ぱば"),
+            ("ガヽ", "ガカ"), ("ガヾ", "ガガ"),
+            ("パヽ", "パハ"), ("パヾ", "パバ"),
+            ("か\u{3099}ゝ", "か\u{3099}か"), ("か\u{3099}ゞ", "か\u{3099}が"),
+            ("は\u{309A}ゝ", "は\u{309A}は"), ("は\u{309A}ゞ", "は\u{309A}ば"),
+            ("カ\u{3099}ヽ", "カ\u{3099}カ"), ("カ\u{3099}ヾ", "カ\u{3099}ガ"),
+            ("ハ\u{309A}ヽ", "ハ\u{309A}ハ"), ("ハ\u{309A}ヾ", "ハ\u{309A}バ")
+        ]
+        for (source, expected) in cases {
+            // Byte comparison also proves that the original source syllable stays intact.
+            XCTAssertEqual(source.expandingJapaneseKanaIterationMarks().map { Array($0.utf8) },
+                           Array(expected.utf8), source)
+            let substring = ("A" + source + "Z").dropFirst().dropLast()
+            XCTAssertEqual(substring.expandingJapaneseKanaIterationMarks().map { Array($0.utf8) },
+                           Array(expected.utf8), source)
+        }
+    }
+
+    func testIterationExpansionPreservesUnsupportedAndLeadingMarkFallback() {
+        for source in ["ゝかな", "ゞかな", "ヽカナ", "ヾカナ", "Aゝ", "猫ヾ", "か ゝ", "すゝ猫ヾ"] {
+            XCTAssertNil(source.expandingJapaneseKanaIterationMarks(), source)
+        }
+        XCTAssertNil("がぱガパ".expandingJapaneseKanaIterationMarks())
+        XCTAssertEqual("かゝゞ".expandingJapaneseKanaIterationMarks(), "かかが")
+    }
+
+    func testDecomposedIterationMarkIsOneVoicedTokenBeforeAnotherMark() {
+        let cases = [
+            ("かゝ\u{3099}ゝ", "かがか"), ("カヽ\u{3099}ヽ", "カガカ"),
+            ("ぱゝ\u{3099}ゝ", "ぱばは"), ("パヽ\u{3099}ヽ", "パバハ"),
+            ("か\u{3099}ゝ\u{3099}ゝ", "か\u{3099}がか"),
+            ("は\u{309A}ゝ\u{3099}ゝ", "は\u{309A}ばは"),
+            ("かゞ\u{3099}ゝ", "かが\u{3099}か")
+        ]
+        for (source, expected) in cases {
+            XCTAssertEqual(source.expandingJapaneseKanaIterationMarks().map { Array($0.utf8) },
+                           Array(expected.utf8), source)
+        }
+        XCTAssertNil("ゝ\u{3099}ゝ".expandingJapaneseKanaIterationMarks())
+        XCTAssertNil("Aゝ\u{3099}ゝ".expandingJapaneseKanaIterationMarks())
+    }
+
 
     
     // MARK: - withKanaToRomaji Tests
@@ -787,6 +873,41 @@ final class JapaneseLanguageToolsTests: XCTestCase {
         XCTAssertEqual("あっ".withKanaToRomaji, "axtu")
     }
     
+    func testRomajiSyllabicNPreservesFollowingNMora() {
+        for (romaji, kana) in [
+            ("nna", "んな"), ("nni", "んに"), ("nnu", "んぬ"),
+            ("nne", "んね"), ("nno", "んの"),
+            ("nnya", "んにゃ"), ("nnyi", "んにぃ"), ("nnyu", "んにゅ"),
+            ("nnye", "んにぇ"), ("nnyo", "んにょ"),
+            ("kanni", "かんに"), ("konnichiha", "こんにちは"),
+            ("annai", "あんない"), ("konnyaku", "こんにゃく"),
+            ("onna", "おんな"), ("shinnyuu", "しんにゅう"),
+            ("NNA", "んな"), ("nnYA", "んにゃ")
+        ] {
+            XCTAssertEqual(romaji.withRomajiToHiragana, kana, romaji)
+        }
+    }
+
+    func testRomajiSyllabicNPreservesBoundariesAndSokuon() {
+        for (romaji, kana) in [
+            ("n", "ん"), ("nn", "ん"), ("n'", "ん"),
+            ("n'a", "んあ"), ("n'ya", "んや"),
+            ("kanpai", "かんぱい"), ("kan.", "かん。"), ("nn!", "ん！"),
+            ("nny", "んy"),
+            ("kappa", "かっぱ"), ("gakkou", "がっこう"),
+            ("kitte", "きって"), ("massugu", "まっすぐ")
+        ] {
+            XCTAssertEqual(romaji.withRomajiToHiragana, kana, romaji)
+        }
+    }
+
+    func testKanaRomajiRoundTripsBeforeNMorae() {
+        for kana in ["かんに", "こんにちは", "あんない", "こんにゃく", "おんな", "しんにゅう"] {
+            XCTAssertEqual(kana.withKanaToRomaji.withRomajiToHiragana, kana)
+            XCTAssertEqual(kana.withKanaToBeginnerHepburnRomaji.withRomajiToHiragana, kana)
+        }
+    }
+
     func testRoundTripWithRomajiToHiragana() {
         // These should round-trip under the same scheme used by the forward mapper.
         let romajiSamples = [

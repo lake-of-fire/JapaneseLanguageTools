@@ -492,23 +492,35 @@ public extension StringProtocol {
 
                 switch decoded.scalar {
                 case UnicodeScalarConstants.hiraganaIterationMark,
-                     UnicodeScalarConstants.katakanaIterationMark:
-                    guard let previousKanaRange else { return nil }
-                    result.append(contentsOf: buffer[previousKanaRange])
-                case UnicodeScalarConstants.voicedHiraganaIterationMark,
+                     UnicodeScalarConstants.katakanaIterationMark,
+                     UnicodeScalarConstants.voicedHiraganaIterationMark,
                      UnicodeScalarConstants.voicedKatakanaIterationMark:
                     guard let previousKanaRange else { return nil }
-                    if let previousScalar = decodeUTF8Scalar(in: buffer, at: previousKanaRange.lowerBound),
-                       previousKanaRange.lowerBound + previousScalar.length == previousKanaRange.upperBound {
-                        var voicedBytes = [UInt8]()
-                        voicedBytes.reserveCapacity(previousScalar.length + 3)
-                        encodeUTF8Scalar(previousScalar.scalar, into: &voicedBytes)
-                        encodeUTF8Scalar(UnicodeScalarConstants.combiningVoicedSoundMark, into: &voicedBytes)
-                        let voiced = String(decoding: voicedBytes, as: UTF8.self).precomposedStringWithCanonicalMapping
-                        result.append(contentsOf: voiced.utf8)
-                    } else {
-                        result.append(contentsOf: buffer[previousKanaRange])
+                    var voiced = decoded.scalar == UnicodeScalarConstants.voicedHiraganaIterationMark
+                        || decoded.scalar == UnicodeScalarConstants.voicedKatakanaIterationMark
+                    // ゞ and ヾ canonically decompose to the unvoiced mark + dakuten.
+                    // Consume that token together so the source range stays on the kana.
+                    let nextIndex = index + decoded.length
+                    if !voiced, nextIndex < count,
+                       let next = decodeUTF8Scalar(in: buffer, at: nextIndex),
+                       next.scalar == UnicodeScalarConstants.combiningVoicedSoundMark {
+                        voiced = true
+                        index += next.length
                     }
+                    // The mark selects the repeated syllable's voicing, independently
+                    // of dakuten or handakuten on the source syllable (NFC or NFD).
+                    // Unicode 17, sections 18.4.1 and 18.4.2.
+                    let previous = String(decoding: buffer[previousKanaRange], as: UTF8.self)
+                    var repeated = String.UnicodeScalarView()
+                    for scalar in previous.decomposedStringWithCanonicalMapping.unicodeScalars
+                    where scalar.value != UnicodeScalarConstants.combiningVoicedSoundMark
+                        && scalar.value != UnicodeScalarConstants.combiningSemiVoicedSoundMark {
+                        repeated.append(scalar)
+                    }
+                    if voiced {
+                        repeated.append(UnicodeScalar(UnicodeScalarConstants.combiningVoicedSoundMark)!)
+                    }
+                    result.append(contentsOf: String(repeated).precomposedStringWithCanonicalMapping.utf8)
                 default:
                     for offset in 0..<decoded.length {
                         result.append(buffer[index + offset])
@@ -516,7 +528,7 @@ public extension StringProtocol {
                     let decodedEnd = index + decoded.length
                     if decoded.scalar == UnicodeScalarConstants.combiningVoicedSoundMark
                         || decoded.scalar == UnicodeScalarConstants.combiningSemiVoicedSoundMark {
-                        if let existingRange = previousKanaRange {
+                        if let existingRange = previousKanaRange, existingRange.upperBound == index {
                             previousKanaRange = existingRange.lowerBound..<decodedEnd
                         }
                     } else {
